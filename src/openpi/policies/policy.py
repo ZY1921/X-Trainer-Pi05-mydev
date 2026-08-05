@@ -15,6 +15,7 @@ from typing_extensions import override
 
 from openpi import transforms as _transforms
 from openpi.models import model as _model
+from openpi.models import rtc as _rtc
 from openpi.shared import array_typing as at
 from openpi.shared import nnx_utils
 
@@ -65,10 +66,72 @@ class Policy(BasePolicy):
             self._rng = rng or jax.random.key(0)
 
     @override
-    def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
+    def infer(
+        self,
+        obs: dict,
+        *,
+        noise: np.ndarray | None = None,
+        prev_chunk_left_over: np.ndarray | None = None,
+        inference_delay: int | None = None,
+        execution_horizon: int | None = None,
+        rtc_prefix_attention_schedule: _rtc.PrefixAttentionSchedule = "exp",
+        rtc_max_guidance_weight: float = 10.0,
+    ) -> dict:  # type: ignore[misc]
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
+
+        rtc_prefix_steps = 0
+        if prev_chunk_left_over is not None:
+            if self._is_pytorch_model:
+                raise NotImplementedError("RTC inference is currently implemented for JAX policies only.")
+            if inference_delay is None:
+                raise ValueError("inference_delay is required when prev_chunk_left_over is provided.")
+            if execution_horizon is None:
+                raise ValueError("execution_horizon is required when prev_chunk_left_over is provided.")
+            if inference_delay < 0:
+                raise ValueError(f"inference_delay must be non-negative, got {inference_delay}.")
+            if not 0 < execution_horizon <= self.action_horizon:
+                raise ValueError(f"execution_horizon must be in [1, {self.action_horizon}], got {execution_horizon}.")
+            if inference_delay > execution_horizon:
+                raise ValueError(
+                    f"inference_delay ({inference_delay}) cannot exceed execution_horizon ({execution_horizon})."
+                )
+            if rtc_max_guidance_weight <= 0:
+                raise ValueError(f"rtc_max_guidance_weight must be positive, got {rtc_max_guidance_weight}.")
+
+            previous_actions = np.asarray(prev_chunk_left_over)
+            if previous_actions.ndim != 2:
+                raise ValueError(
+                    f"prev_chunk_left_over must have shape (time, action_dim), got {previous_actions.shape}."
+                )
+            rtc_prefix_steps = min(len(previous_actions), execution_horizon)
+            if rtc_prefix_steps == 0:
+                raise ValueError("prev_chunk_left_over cannot be empty.")
+            # Feeding the physical-space actions through the normal input pipeline
+            # re-anchors delta actions to the current observation and applies the
+            # checkpoint's normalization and action-dimension padding.
+            inputs["actions"] = np.array(previous_actions[:rtc_prefix_steps], copy=True)
+
         inputs = self._input_transform(inputs)
+
+        rtc_prev_chunk = None
+        rtc_prefix_weights = None
+        if prev_chunk_left_over is not None:
+            transformed_previous_actions = np.asarray(inputs.pop("actions"))
+            if transformed_previous_actions.shape[-1] != self.action_dim:
+                raise ValueError(
+                    "Transformed RTC prefix action dimension does not match the model: "
+                    f"{transformed_previous_actions.shape[-1]} != {self.action_dim}."
+                )
+            rtc_prev_chunk = np.zeros((self.action_horizon, self.action_dim), dtype=np.float32)
+            rtc_prev_chunk[:rtc_prefix_steps] = transformed_previous_actions
+            rtc_prefix_weights = _rtc.get_prefix_weights(
+                inference_delay,
+                min(execution_horizon, rtc_prefix_steps),
+                self.action_horizon,
+                rtc_prefix_attention_schedule,
+            )
+
         if not self._is_pytorch_model:
             # Make a batch and convert to jax.Array.
             inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
@@ -87,11 +150,21 @@ class Policy(BasePolicy):
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
             sample_kwargs["noise"] = noise
 
+        if rtc_prev_chunk is not None:
+            sample_kwargs.update(
+                rtc_prev_chunk=jnp.asarray(rtc_prev_chunk)[None, ...],
+                rtc_prefix_weights=jnp.asarray(rtc_prefix_weights),
+                rtc_max_guidance_weight=jnp.asarray(rtc_max_guidance_weight, dtype=jnp.float32),
+            )
+
         observation = _model.Observation.from_dict(inputs)
         start_time = time.monotonic()
+        sampled_actions = self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs)
+        if not self._is_pytorch_model:
+            jax.block_until_ready(sampled_actions)
         outputs = {
             "state": inputs["state"],
-            "actions": self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
+            "actions": sampled_actions,
         }
         model_time = time.monotonic() - start_time
         if self._is_pytorch_model:
@@ -108,6 +181,14 @@ class Policy(BasePolicy):
     @property
     def metadata(self) -> dict[str, Any]:
         return self._metadata
+
+    @property
+    def action_horizon(self) -> int:
+        return self._model.action_horizon
+
+    @property
+    def action_dim(self) -> int:
+        return self._model.action_dim
 
 
 class PolicyRecorder(_base_policy.BasePolicy):
