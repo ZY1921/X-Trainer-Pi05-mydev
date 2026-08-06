@@ -203,8 +203,8 @@ class PolicyRecorder(_base_policy.BasePolicy):
         self._record_step = 0
 
     @override
-    def infer(self, obs: dict) -> dict:  # type: ignore[misc]
-        results = self._policy.infer(obs)
+    def infer(self, obs: dict, **kwargs: Any) -> dict:  # type: ignore[misc]
+        results = self._policy.infer(obs, **kwargs)
 
         data = {"inputs": obs, "outputs": results}
         data = flax.traverse_util.flatten_dict(data, sep="/")
@@ -214,3 +214,15 @@ class PolicyRecorder(_base_policy.BasePolicy):
 
         np.save(output_path, np.asarray(data))
         return results
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return self._policy.metadata  # type: ignore[attr-defined]
+
+    @property
+    def action_horizon(self) -> int:
+        return self._policy.action_horizon  # type: ignore[attr-defined]
+
+    @property
+    def action_dim(self) -> int:
+        return self._policy.action_dim  # type: ignore[attr-defined]

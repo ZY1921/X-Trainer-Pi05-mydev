@@ -84,8 +84,8 @@ class PolicyDiagnosticsWrapper(_base_policy.BasePolicy):
         )
 
     @override
-    def infer(self, obs: dict) -> dict:
-        outputs = self._policy.infer(obs)
+    def infer(self, obs: dict, **kwargs: Any) -> dict:  # type: ignore[misc]
+        outputs = self._policy.infer(obs, **kwargs)
         self._step += 1
 
         if self._max_steps > 0 and self._step > self._max_steps:
@@ -114,6 +114,14 @@ class PolicyDiagnosticsWrapper(_base_policy.BasePolicy):
         if isinstance(metadata, dict):
             return metadata
         return {}
+
+    @property
+    def action_horizon(self) -> int:
+        return self._policy.action_horizon  # type: ignore[attr-defined]
+
+    @property
+    def action_dim(self) -> int:
+        return self._policy.action_dim  # type: ignore[attr-defined]
 
     def _log_step(self, obs: dict, outputs: dict) -> None:
         if "observation.state" not in obs or "actions" not in outputs:
