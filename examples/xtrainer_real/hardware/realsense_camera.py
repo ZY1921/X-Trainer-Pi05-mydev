@@ -23,7 +23,7 @@ class RealSenseCamera:
         if self._connected:
             return
 
-        import pyrealsense2 as rs
+        import pyrealsense2 as rs  # noqa: PLC0415
 
         pipeline = rs.pipeline()
         config = rs.config()
@@ -34,7 +34,7 @@ class RealSenseCamera:
 
         # Warm up frames.
         for _ in range(10):
-            pipeline.wait_for_frames(timeout_ms=1000)
+            pipeline.wait_for_frames(timeout_ms=5000)
 
         self._pipeline = pipeline
         self._connected = True

@@ -22,12 +22,58 @@ from typing_extensions import override
 import tyro
 import websockets.sync.client
 
+from examples.xtrainer_real import diagnostics as _diagnostics
+from examples.xtrainer_real import env as _env
+from examples.xtrainer_real import image_preprocessing as _image_preprocessing
 from examples.xtrainer_real import main as _sync_main
 
 PROTOCOL_NAME = "openpi-async-rtc"
 PROTOCOL_VERSION = 1
 
 logger = logging.getLogger(__name__)
+
+
+class RightArmOnlyEnvironment(_env.XTrainerRealEnvironment):
+    """Discard model actions for the left arm after each episode reset."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._left_hold_action: np.ndarray | None = None
+
+    @override
+    def get_observation(self) -> dict:
+        observation = super().get_observation()
+        _image_preprocessing.match_legacy_dataset_images(observation)
+        return observation
+
+    @override
+    def reset(self) -> None:
+        # Let the base environment move both arms to the server-provided reset
+        # pose, then hold the left arm and gripper at that pose for the episode.
+        super().reset()
+        if self._last_action is None:
+            raise RuntimeError("X-Trainer reset did not initialize the current action.")
+        self._left_hold_action = np.array(self._last_action[:7], copy=True)
+        logger.info("Left arm frozen after reset at %s", self._left_hold_action.tolist())
+
+    @override
+    def apply_action(self, action: dict) -> None:
+        if "actions" not in action:
+            raise KeyError(f"Missing 'actions' in action dict: {tuple(action.keys())}")
+        if self._left_hold_action is None:
+            raise RuntimeError("Left-arm hold pose is unavailable; reset must run before applying actions.")
+
+        target = np.asarray(action["actions"], dtype=np.float64).reshape(-1).copy()
+        if target.shape[0] != 14:
+            raise ValueError(f"Expected action length 14, got {target.shape[0]}")
+
+        # [0:7] is left joints 1-6 plus the left gripper. Keep it fixed at
+        # the post-reset pose; [7:14] (the right arm) remains model-controlled.
+        target[:7] = self._left_hold_action
+
+        filtered_action = dict(action)
+        filtered_action["actions"] = target
+        super().apply_action(filtered_action)
 
 
 @dataclasses.dataclass
@@ -556,10 +602,7 @@ def _run_robot(args: Args, worker: AsyncRTCInferenceWorker) -> None:
     metadata = worker.metadata
     logger.info("Server metadata: %s", metadata)
 
-    from examples.xtrainer_real import diagnostics as _diagnostics
-    from examples.xtrainer_real import env as _env
-
-    environment = _env.XTrainerRealEnvironment(
+    environment = RightArmOnlyEnvironment(
         left_robot_ip=args.left_robot_ip,
         right_robot_ip=args.right_robot_ip,
         left_gripper_port=args.left_gripper_port,

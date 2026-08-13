@@ -1,0 +1,203 @@
+"""Run the X-Trainer while executing model actions on the right arm only.
+
+Both arms still move to the server-provided reset pose at the start of each
+episode. After reset, the left arm and left gripper are held at that pose, and
+only the right-arm portion of each model action is executed.
+"""
+
+import logging
+from pathlib import Path
+import time
+
+import cv2
+import numpy as np
+from openpi_client import action_chunk_broker
+from openpi_client import websocket_client_policy as _websocket_client_policy
+from openpi_client.runtime import runtime as _runtime
+from openpi_client.runtime.agents import policy_agent as _policy_agent
+from typing_extensions import override
+import tyro
+
+from examples.xtrainer_real import diagnostics as _diagnostics
+from examples.xtrainer_real import env as _env
+from examples.xtrainer_real import image_preprocessing as _image_preprocessing
+from examples.xtrainer_real import main as _sync_main
+
+logger = logging.getLogger(__name__)
+action_logger = logging.getLogger(f"{__name__}.actions")
+_PREVIEW_WINDOW_NAME = "X-Trainer observations: top | left wrist | right wrist"
+
+
+class _PreviewStopRequestedError(Exception):
+    """Raised when the operator closes the preview or presses Q/Esc."""
+
+
+def _configure_action_logger() -> Path:
+    output_dir = Path.cwd() / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    log_path = output_dir / f"inference_actions_{timestamp}.log"
+
+    action_logger.setLevel(logging.INFO)
+    action_logger.propagate = False
+    handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    action_logger.addHandler(handler)
+    return log_path
+
+
+class RightArmOnlyEnvironment(_env.XTrainerRealEnvironment):
+    """X-Trainer environment that discards the model's left-arm actions."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._left_hold_action: np.ndarray | None = None
+        self._action_log_step = 0
+        self._preview_window_created = False
+
+    @override
+    def get_observation(self) -> dict:
+        observation = super().get_observation()
+        _image_preprocessing.match_legacy_dataset_images(observation)
+
+        preview_frames = []
+        for camera_name, label in (
+            ("top", "TOP"),
+            ("left_wrist", "LEFT WRIST"),
+            ("right_wrist", "RIGHT WRIST"),
+        ):
+            # Observations are RGB. Convert a copy to BGR for OpenCV so the
+            # arrays sent to the server remain completely unchanged.
+            rgb = observation[f"observation.images.{camera_name}"]
+            bgr = np.ascontiguousarray(rgb[..., ::-1])
+            cv2.putText(bgr, label, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3)
+            cv2.putText(bgr, label, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+            preview_frames.append(bgr)
+
+        preview = np.hstack(preview_frames)
+        if not self._preview_window_created:
+            cv2.namedWindow(_PREVIEW_WINDOW_NAME, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(_PREVIEW_WINDOW_NAME, preview.shape[1], preview.shape[0])
+            self._preview_window_created = True
+
+        cv2.imshow(_PREVIEW_WINDOW_NAME, preview)
+        key = cv2.waitKey(1) & 0xFF
+        window_visible = cv2.getWindowProperty(_PREVIEW_WINDOW_NAME, cv2.WND_PROP_VISIBLE)
+        if key in (ord("q"), ord("Q"), 27) or window_visible < 1:
+            raise _PreviewStopRequestedError
+
+        return observation
+
+    @override
+    def reset(self) -> None:
+        # The base reset first moves both arms to the server-provided reset pose.
+        super().reset()
+        if self._last_action is None:
+            raise RuntimeError("X-Trainer reset did not initialize the current action.")
+        self._left_hold_action = np.array(self._last_action[:7], copy=True)
+        self._action_log_step = 0
+        logger.info("Left arm frozen after reset at %s", self._left_hold_action.tolist())
+
+    @override
+    def apply_action(self, action: dict) -> None:
+        if "actions" not in action:
+            raise KeyError(f"Missing 'actions' in action dict: {tuple(action.keys())}")
+        if self._left_hold_action is None:
+            raise RuntimeError("Left-arm hold pose is unavailable; reset must run before applying actions.")
+
+        target = np.asarray(action["actions"], dtype=np.float64).reshape(-1).copy()
+        if target.shape[0] != 14:
+            raise ValueError(f"Expected action length 14, got {target.shape[0]}")
+
+        action_logger.info("step=%d action=%s", self._action_log_step, target.tolist())
+        self._action_log_step += 1
+
+        # [0:7] is left joints 1-6 plus the left gripper. Keep it fixed at
+        # the post-reset pose; [7:14] (the right arm) remains model-controlled.
+        target[:7] = self._left_hold_action
+
+        filtered_action = dict(action)
+        filtered_action["actions"] = target
+        super().apply_action(filtered_action)
+
+    @override
+    def close(self) -> None:
+        if self._preview_window_created:
+            try:
+                cv2.destroyWindow(_PREVIEW_WINDOW_NAME)
+                cv2.waitKey(1)
+            except cv2.error:
+                pass
+            self._preview_window_created = False
+        super().close()
+
+
+def main(args: _sync_main.Args) -> None:
+    action_log_path = _configure_action_logger()
+    logging.info("Writing inference action log to %s", action_log_path)
+
+    ws_client_policy = _websocket_client_policy.WebsocketClientPolicy(
+        host=args.host,
+        port=args.port,
+    )
+    metadata = ws_client_policy.get_server_metadata()
+    logging.info("Server metadata: %s", metadata)
+
+    environment = RightArmOnlyEnvironment(
+        left_robot_ip=args.left_robot_ip,
+        right_robot_ip=args.right_robot_ip,
+        left_gripper_port=args.left_gripper_port,
+        right_gripper_port=args.right_gripper_port,
+        left_gripper_id=args.left_gripper_id,
+        right_gripper_id=args.right_gripper_id,
+        left_gripper_servo_pos=args.left_gripper_servo_pos,
+        right_gripper_servo_pos=args.right_gripper_servo_pos,
+        camera_top_serial=args.camera_top_serial,
+        camera_left_wrist_serial=args.camera_left_wrist_serial,
+        camera_right_wrist_serial=args.camera_right_wrist_serial,
+        camera_fps=args.camera_fps,
+        render_height=args.render_height,
+        render_width=args.render_width,
+        prompt=args.prompt,
+        reset_pose=metadata.get("reset_pose"),
+        max_joint_delta=args.max_joint_delta,
+        ramp_step=args.ramp_step,
+        ramp_max_steps=args.ramp_max_steps,
+        gripper_update_threshold=args.gripper_update_threshold,
+        servo_step_limit=args.servo_step_limit,
+    )
+
+    subscribers = []
+    if args.debug_action_state_diagnostics:
+        subscribers.append(
+            _diagnostics.ActionStateDiagnosticsSubscriber(
+                interval=args.debug_action_state_interval,
+                max_steps=args.debug_action_state_max_steps,
+            )
+        )
+
+    runtime = _runtime.Runtime(
+        environment=environment,
+        agent=_policy_agent.PolicyAgent(
+            policy=action_chunk_broker.ActionChunkBroker(
+                policy=ws_client_policy,
+                action_horizon=args.action_horizon,
+            )
+        ),
+        subscribers=subscribers,
+        max_hz=args.control_hz,
+        num_episodes=args.num_episodes,
+        max_episode_steps=args.max_episode_steps,
+    )
+
+    try:
+        runtime.run()
+    except _PreviewStopRequestedError:
+        logging.info("Camera preview closed; stopping the client.")
+    finally:
+        environment.close()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, force=True)
+    main(tyro.cli(_sync_main.Args))
