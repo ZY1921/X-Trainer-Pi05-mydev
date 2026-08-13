@@ -1,3 +1,5 @@
+"""Policy-server deployment entry point."""
+
 import dataclasses
 import enum
 import logging

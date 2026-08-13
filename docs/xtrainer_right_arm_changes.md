@@ -136,7 +136,7 @@
 
 ### 3. 异步 RTC 服务端加入 JPEG 解码
 
-文件：`scripts/serve_policy_async_rtc.py`
+文件：`scripts/deployment/serve_policy_async_rtc.py`
 
 - 服务端声明支持 `raw` 和 `jpeg` 两种图片传输编码。
 - 在执行 `policy.infer()` 前解码图片，使模型仍接收标准 NumPy RGB 图像。
@@ -148,7 +148,7 @@
 
 客户端文件：`examples/xtrainer_real/async_rtc_main.py`
 
-服务端文件：`scripts/serve_policy_async_rtc.py`
+服务端文件：`scripts/deployment/serve_policy_async_rtc.py`
 
 - 协议版本由 v1 升级为 v2。
 - v2 请求新增 `image_transport` 描述，并允许图像字段使用编码后的线缆格式。
@@ -160,8 +160,8 @@
 文件：
 
 - `packages/openpi-client/src/openpi_client/image_transport_test.py`
-- `scripts/async_rtc_client_test.py`
-- `scripts/serve_policy_async_rtc_test.py`
+- `scripts/deployment/async_rtc_client_test.py`
+- `scripts/deployment/serve_policy_async_rtc_test.py`
 
 覆盖内容：
 

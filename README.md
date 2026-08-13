@@ -658,7 +658,7 @@ cd /path/to/workspace/Xtrainer-PI05-feat-xtrainer-finetune
 
 HF_LEROBOT_HOME=/path/to/lerobot_cache \
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
-uv run scripts/compute_norm_stats.py \
+uv run scripts/training/compute_norm_stats.py \
   --exp-name test1
   --config-name pi05_xtrainer_finetune \
   --data.repo-id <your_hf_username>/<your_xtrainer_dataset> \
@@ -668,7 +668,7 @@ uv run scripts/compute_norm_stats.py \
 如果项目使用本地 YAML 或其他本地配置覆盖方式，也可使用 handoff 中的形式：
 
 ```bash
-uv run --no-sync scripts/compute_norm_stats.py \
+uv run --no-sync scripts/training/compute_norm_stats.py \
   --local-config-path examples/xtrainer_real/dobot_settings.yaml
 ```
 
@@ -721,7 +721,7 @@ uv run scripts/check_batch_finite.py \
   --check-grad
 ```
 
-如果当前分支没有该脚本，可先用 `scripts/train.py --num-train-steps=10` 做 smoke training，但不如专用检查脚本安全。
+如果当前分支没有该脚本，可先用 `scripts/training/train.py --num-train-steps=10` 做 smoke training，但不如专用检查脚本安全。
 
 ---
 
@@ -782,7 +782,7 @@ cd /path/to/workspace/Xtrainer-PI05-feat-xtrainer-finetune
 HF_LEROBOT_HOME=/path/to/lerobot_cache \
 HF_HUB_OFFLINE=1 \
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
-uv run scripts/train.py \
+uv run scripts/training/train.py \
   pi05_xtrainer_finetune \
   --data.repo-id <your_hf_username>/<your_xtrainer_dataset> \
   --data.assets.asset-id xtrainer-custom \
@@ -805,7 +805,7 @@ uv run scripts/train.py \
 HF_LEROBOT_HOME=/path/to/lerobot_cache \
 HF_HUB_OFFLINE=1 \
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
-uv run scripts/train.py \
+uv run scripts/training/train.py \
   pi05_xtrainer_finetune \
   --data.repo-id <your_hf_username>/<your_xtrainer_dataset> \
   --data.assets.asset-id xtrainer-custom \
@@ -913,7 +913,7 @@ cd /path/to/workspace/Xtrainer-PI05-feat-xtrainer-finetune
 HF_LEROBOT_HOME=/path/to/lerobot_cache \
 HF_HUB_OFFLINE=1 \
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
-uv run scripts/train.py \
+uv run scripts/training/train.py \
   pi05_xtrainer_lora_finetune \
   --data.repo-id <your_hf_username>/<your_xtrainer_dataset> \
   --data.assets.asset-id xtrainer-custom \
@@ -930,7 +930,7 @@ uv run scripts/train.py \
 HF_LEROBOT_HOME=/path/to/lerobot_cache \
 HF_HUB_OFFLINE=1 \
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
-uv run scripts/train.py \
+uv run scripts/training/train.py \
   pi05_xtrainer_lora_finetune \
   --data.repo-id <your_hf_username>/<your_xtrainer_dataset> \
   --data.assets.asset-id xtrainer-custom \
@@ -948,7 +948,7 @@ r64 训练示例：
 HF_LEROBOT_HOME=/path/to/lerobot_cache \
 HF_HUB_OFFLINE=1 \
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
-uv run scripts/train.py \
+uv run scripts/training/train.py \
   pi05_xtrainer_lora_r64_finetune \
   --data.repo-id <your_hf_username>/<your_xtrainer_dataset> \
   --data.assets.asset-id xtrainer-custom \
@@ -1002,13 +1002,13 @@ base smoke test：
 
 ```bash
 cd /path/to/workspace/Xtrainer-PI05-feat-xtrainer-finetune
-uv run scripts/serve_policy.py --env XTRAINER
+uv run scripts/deployment/serve_policy.py --env XTRAINER
 ```
 
 等价形式：
 
 ```bash
-uv run scripts/serve_policy.py policy:checkpoint \
+uv run scripts/deployment/serve_policy.py policy:checkpoint \
   --policy.config=pi05_xtrainer \
   --policy.dir=gs://openpi-assets/checkpoints/pi05_base
 ```
@@ -1016,7 +1016,7 @@ uv run scripts/serve_policy.py policy:checkpoint \
 使用训练好的 X-Trainer checkpoint：
 
 ```bash
-uv run scripts/serve_policy.py policy:checkpoint \
+uv run scripts/deployment/serve_policy.py policy:checkpoint \
   --policy.config=pi05_xtrainer_custom \
   --policy.dir=/path/to/checkpoints/<config_name>/<exp_name>/<step>
 ```
@@ -1255,9 +1255,9 @@ find ${HF_LEROBOT_HOME:-$HOME/.cache/huggingface/lerobot} -maxdepth 3 -type d | 
 | `pyproject.toml` | Python、JAX、LeRobot、OpenPI 依赖版本。 |
 | `src/openpi/training/config.py` | Pi0.5 / XTrainer 数据和训练配置。 |
 | `src/openpi/policies/xtrainer_policy.py` | XTrainer observation/action transform。 |
-| `scripts/compute_norm_stats.py` | 计算 norm stats。 |
-| `scripts/train.py` | JAX 训练入口。 |
-| `scripts/serve_policy.py` | policy server 启动入口。 |
+| `scripts/training/compute_norm_stats.py` | 计算 norm stats。 |
+| `scripts/training/train.py` | JAX 训练入口。 |
+| `scripts/deployment/serve_policy.py` | policy server 启动入口。 |
 | `docs/remote_inference.md` | OpenPI 远程推理说明。 |
 | `docs/norm_stats.md` | norm stats 说明。 |
 | `examples/xtrainer_real/README.md` | XTrainer real robot 推理说明。 |

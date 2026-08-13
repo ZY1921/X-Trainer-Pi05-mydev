@@ -1,3 +1,5 @@
+"""Open-loop policy evaluation command."""
+
 import csv
 import dataclasses
 import json

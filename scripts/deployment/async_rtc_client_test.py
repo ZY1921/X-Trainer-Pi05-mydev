@@ -1,4 +1,5 @@
 # ruff: noqa: SLF001
+# Deployment protocol integration tests for the asynchronous RTC client.
 
 import numpy as np
 from openpi_client import image_transport

@@ -1,3 +1,5 @@
+"""Tests for the JAX training entry point."""
+
 import dataclasses
 import os
 import pathlib

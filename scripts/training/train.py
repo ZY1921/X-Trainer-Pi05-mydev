@@ -1,3 +1,5 @@
+"""JAX training entry point."""
+
 import dataclasses
 import functools
 import logging

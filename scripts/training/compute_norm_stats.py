@@ -1,6 +1,6 @@
 """Compute normalization statistics for a config.
 
-This script is used to compute the normalization statistics for a given config. It
+This training script computes the normalization statistics for a given config. It
 will compute the mean and standard deviation of the data in the dataset and save it
 to the config assets directory.
 """

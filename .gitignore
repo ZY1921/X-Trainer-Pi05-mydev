@@ -221,3 +221,8 @@ __marimo__/
 /checkpoints/
 /wandb/
 /output/
+
+# Local code synchronization tooling and machine credentials
+/scripts/code_sync/
+/.sync-targets.conf
+/.sync-targets.conf.example

@@ -9,7 +9,7 @@ This runtime is self-contained in this repository (no dependency on an external 
 Policy server (GPU machine):
 
 ```bash
-uv run scripts/serve_policy.py --env XTRAINER
+uv run scripts/deployment/serve_policy.py --env XTRAINER
 ```
 
 Robot control machine:
@@ -28,19 +28,19 @@ python -m examples.xtrainer_real.main \
 Use the new XTrainer env shortcut:
 
 ```bash
-uv run scripts/serve_policy.py --env XTRAINER
+uv run scripts/deployment/serve_policy.py --env XTRAINER
 ```
 
 This is equivalent to:
 
 ```bash
-uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi05_xtrainer --policy.dir=gs://openpi-assets/checkpoints/pi05_base
+uv run scripts/deployment/serve_policy.py policy:checkpoint --policy.config=pi05_xtrainer --policy.dir=gs://openpi-assets/checkpoints/pi05_base
 ```
 
 If you have an xtrainer-specific fine-tuned checkpoint with `assets/xtrainer` norm stats, use:
 
 ```bash
-uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi05_xtrainer_custom --policy.dir=/path/to/your/checkpoint
+uv run scripts/deployment/serve_policy.py policy:checkpoint --policy.config=pi05_xtrainer_custom --policy.dir=/path/to/your/checkpoint
 ```
 
 ## 2) Run robot client (control machine)

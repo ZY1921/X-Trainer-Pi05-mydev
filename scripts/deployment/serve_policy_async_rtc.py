@@ -1,6 +1,6 @@
 """Serve an OpenPI policy for asynchronous RTC inference.
 
-This is intentionally a separate entry point from ``scripts/serve_policy.py``.
+This is intentionally separate from ``scripts/deployment/serve_policy.py``.
 The original server keeps its observation-only wire protocol, while this server
 uses versioned request/response envelopes that can carry RTC guidance inputs.
 """
@@ -25,7 +25,7 @@ from openpi.policies import policy_config as _policy_config
 from openpi.training import config as _config
 
 if __package__:
-    from scripts import serve_policy as _serve_policy
+    from scripts.deployment import serve_policy as _serve_policy
 else:
     import serve_policy as _serve_policy
 
@@ -40,7 +40,7 @@ class Args(_serve_policy.Args):
     """Arguments for the asynchronous RTC policy server.
 
     All model, checkpoint, environment, diagnostics, and port arguments are
-    inherited from ``scripts/serve_policy.py``.
+    inherited from ``scripts/deployment/serve_policy.py``.
     """
 
     asset_id: str | None = None

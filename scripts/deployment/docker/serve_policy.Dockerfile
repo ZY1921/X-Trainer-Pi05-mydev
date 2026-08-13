@@ -2,7 +2,7 @@
 # Based on UV's instructions: https://docs.astral.sh/uv/guides/integration/docker/#developing-in-a-container
 
 # Build the container:
-# docker build . -t openpi_server -f scripts/docker/serve_policy.Dockerfile
+# docker build . -t openpi_server -f scripts/deployment/docker/serve_policy.Dockerfile
 
 # Run the container:
 # docker run --rm -it --network=host -v .:/app --gpus=all openpi_server /bin/bash
@@ -35,4 +35,4 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY src/openpi/models_pytorch/transformers_replace/ /tmp/transformers_replace/
 RUN /.venv/bin/python -c "import transformers; print(transformers.__file__)" | xargs dirname | xargs -I{} cp -r /tmp/transformers_replace/* {} && rm -rf /tmp/transformers_replace
 
-CMD /bin/bash -c "uv run scripts/serve_policy.py $SERVER_ARGS"
+CMD /bin/bash -c "uv run scripts/deployment/serve_policy.py $SERVER_ARGS"

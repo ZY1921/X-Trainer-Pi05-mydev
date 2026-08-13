@@ -33,12 +33,12 @@ First, change the `rlds_data_dir` path in your `TrainConfig` to the directory th
 
 Then, compute normalization statistics (this will take ~10 minutes):
 ```bash
-uv run --group rlds scripts/compute_norm_stats.py --config-name pi05_full_droid_finetune --max-frames 10_000_000
+uv run --group rlds scripts/training/compute_norm_stats.py --config-name pi05_full_droid_finetune --max-frames 10_000_000
 ```
 
 Run training:
 ```bash
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run --group rlds scripts/train.py pi05_full_droid_finetune --exp-name=my_experiment --overwrite
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run --group rlds scripts/training/train.py pi05_full_droid_finetune --exp-name=my_experiment --overwrite
 ```
 
 **Note**: The original pi0.5-DROID model was trained with joint velocity actions.
@@ -102,7 +102,7 @@ You can modify the config easily to work with other base models, or use your cus
 
 To launch training:
 ```
-uv run scripts/train.py pi05_droid_finetune --exp-name=my_experiment --overwrite
+uv run scripts/training/train.py pi05_droid_finetune --exp-name=my_experiment --overwrite
 ```
 
 Once trained, you can follow the instructions in [`examples/droid/README.md`](examples/droid/README.md) to serve the policy and run it on the robot.

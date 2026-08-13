@@ -1,4 +1,5 @@
 #!/bin/bash
+# NVIDIA container-toolkit helper for policy deployment hosts.
 
 # Installs the NVIDIA Container Toolkit, which allows Docker containers to access NVIDIA GPUs.
 # NVIDIA's official documentation: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html

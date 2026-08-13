@@ -1,4 +1,5 @@
 #!/bin/bash
+# Docker installation helper for policy deployment hosts.
 
 # Add Docker's official GPG key:
 sudo apt-get update

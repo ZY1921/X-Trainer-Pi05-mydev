@@ -8,19 +8,19 @@ We provide utilities for running openpi models remotely. This is useful for runn
 To start a remote policy server, you can simply run the following command:
 
 ```bash
-uv run scripts/serve_policy.py --env=[DROID | ALOHA | LIBERO | XTRAINER]
+uv run scripts/deployment/serve_policy.py --env=[DROID | ALOHA | LIBERO | XTRAINER]
 ```
 
 The `env` argument specifies which $\pi_0$ checkpoint should be loaded. Under the hood, this script will execute a command like the following, which you can use to start a policy server, e.g. for checkpoints you trained yourself (here an example for the DROID environment):
 
 ```bash
-uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi0_fast_droid --policy.dir=gs://openpi-assets/checkpoints/pi0_fast_droid
+uv run scripts/deployment/serve_policy.py policy:checkpoint --policy.config=pi0_fast_droid --policy.dir=gs://openpi-assets/checkpoints/pi0_fast_droid
 ```
 
 For XTrainer, we provide `pi05_xtrainer` (base-compatible norm stats) and `pi05_xtrainer_custom` (expects `assets/xtrainer` in your checkpoint):
 
 ```bash
-uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi05_xtrainer --policy.dir=gs://openpi-assets/checkpoints/pi05_base
+uv run scripts/deployment/serve_policy.py policy:checkpoint --policy.config=pi05_xtrainer --policy.dir=gs://openpi-assets/checkpoints/pi05_base
 ```
 
 This will start a policy server that will serve the policy specified by the `config` and `dir` arguments. The policy will be served on the specified port (default: 8000).

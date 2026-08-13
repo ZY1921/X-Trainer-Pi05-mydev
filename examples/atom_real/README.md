@@ -87,19 +87,19 @@ uv run examples/atom_real/convert_hdf5_to_lerobot_2_1.py \
 Full fine-tuning (JAX):
 
 ```bash
-uv run scripts/train.py pi05_atom_finetune --exp_name atom_ft_001
+uv run scripts/training/train.py pi05_atom_finetune --exp_name atom_ft_001
 ```
 
 LoRA fine-tuning:
 
 ```bash
-uv run scripts/train.py pi05_atom_lora_finetune --exp_name atom_lora_001
+uv run scripts/training/train.py pi05_atom_lora_finetune --exp_name atom_lora_001
 ```
 
 If using PyTorch trainer:
 
 ```bash
-uv run scripts/train_pytorch.py pi05_atom_finetune --exp_name atom_ft_torch_001
+uv run scripts/training/train_pytorch.py pi05_atom_finetune --exp_name atom_ft_torch_001
 ```
 
 ## 3) Start policy server
@@ -107,13 +107,13 @@ uv run scripts/train_pytorch.py pi05_atom_finetune --exp_name atom_ft_torch_001
 Default Atom env (pi05 base + atom transforms):
 
 ```bash
-uv run scripts/serve_policy.py --env ATOM --port 8000
+uv run scripts/deployment/serve_policy.py --env ATOM --port 8000
 ```
 
 Or custom checkpoint:
 
 ```bash
-uv run scripts/serve_policy.py policy:checkpoint \
+uv run scripts/deployment/serve_policy.py policy:checkpoint \
   --policy.config pi05_atom_finetune \
   --policy.dir /path/to/checkpoint/20000 \
   --port 8000

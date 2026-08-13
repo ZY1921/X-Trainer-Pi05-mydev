@@ -2,7 +2,7 @@ import numpy as np
 from openpi_client import image_transport
 import pytest
 
-from scripts import serve_policy_async_rtc
+from scripts.deployment import serve_policy_async_rtc
 
 
 class _FakePolicy:
