@@ -1,4 +1,7 @@
+# ruff: noqa: SLF001
+
 import numpy as np
+from openpi_client import image_transport
 import pytest
 
 from examples.xtrainer_real import async_rtc_main
@@ -50,6 +53,33 @@ def _make_agent(worker, *, rtc_enabled=True, max_delay=4):
         warmup_rtc=False,
         debug_timing=False,
     )
+
+
+def test_worker_encodes_jpeg_observations_in_request_envelope():
+    worker = object.__new__(async_rtc_main.AsyncRTCInferenceWorker)
+    worker._rtc_inference_delay = 2
+    worker._rtc_execution_horizon = 4
+    worker._rtc_prefix_attention_schedule = "exp"
+    worker._rtc_max_guidance_weight = 10.0
+    worker._image_transport_codec = "jpeg"
+    worker._image_jpeg_quality = 90
+    image = np.zeros((48, 64, 3), dtype=np.uint8)
+    task = async_rtc_main.InferenceTask(
+        request_id=3,
+        episode_id=1,
+        request_step=4,
+        observation={"observation.images.top": image},
+        prev_chunk_left_over=None,
+        timeout_s=1.0,
+    )
+
+    request, stats = worker._make_request(task)
+    decoded, _ = image_transport.decode_observation_images(request["observation"], codec="jpeg")
+
+    assert request["image_transport"] == {"codec": "jpeg", "jpeg_quality": 90}
+    assert isinstance(request["observation"]["observation.images.top"]["data"], bytes)
+    assert stats["wire_image_bytes"] < stats["raw_image_bytes"]
+    assert decoded["observation.images.top"].shape == image.shape
 
 
 def test_rtc_request_runs_in_background_and_switches_using_actual_delay():

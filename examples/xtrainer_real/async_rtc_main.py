@@ -15,6 +15,7 @@ import time
 from typing import Any, Literal
 
 import numpy as np
+from openpi_client import image_transport as _image_transport
 from openpi_client import msgpack_numpy
 from openpi_client.runtime import agent as _agent
 from openpi_client.runtime import runtime as _runtime
@@ -28,7 +29,7 @@ from examples.xtrainer_real import image_preprocessing as _image_preprocessing
 from examples.xtrainer_real import main as _sync_main
 
 PROTOCOL_NAME = "openpi-async-rtc"
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,12 @@ class Args(_sync_main.Args):
     debug_async_timing: bool = False
     """Log request latency, measured delay, and chunk switch indices."""
 
+    image_transport_codec: Literal["raw", "jpeg"] = "jpeg"
+    """Image representation used on the websocket; decoded dimensions are unchanged."""
+
+    image_jpeg_quality: int = 90
+    """JPEG quality used when --image-transport-codec=jpeg."""
+
 
 @dataclasses.dataclass(frozen=True)
 class InferenceTask:
@@ -130,6 +137,7 @@ class InferenceResponse:
     result: dict[str, Any] | None
     round_trip_ms: float
     error: BaseException | None = None
+    client_transport: dict[str, Any] | None = None
 
 
 class AsyncRTCInferenceWorker:
@@ -145,6 +153,8 @@ class AsyncRTCInferenceWorker:
         rtc_execution_horizon: int,
         rtc_prefix_attention_schedule: str,
         rtc_max_guidance_weight: float,
+        image_transport_codec: Literal["raw", "jpeg"],
+        image_jpeg_quality: int,
     ) -> None:
         self._uri = host if host.startswith("ws") else f"ws://{host}"
         self._uri = f"{self._uri}:{port}"
@@ -153,6 +163,8 @@ class AsyncRTCInferenceWorker:
         self._rtc_execution_horizon = rtc_execution_horizon
         self._rtc_prefix_attention_schedule = rtc_prefix_attention_schedule
         self._rtc_max_guidance_weight = rtc_max_guidance_weight
+        self._image_transport_codec = image_transport_codec
+        self._image_jpeg_quality = image_jpeg_quality
 
         self._tasks: queue.Queue[InferenceTask | None] = queue.Queue(maxsize=1)
         self._responses: queue.Queue[InferenceResponse] = queue.Queue()
@@ -216,9 +228,12 @@ class AsyncRTCInferenceWorker:
                 if task is None:
                     break
                 start_time = time.monotonic()
+                client_transport: dict[str, Any] = {}
                 try:
-                    request = self._make_request(task)
-                    connection.send(msgpack_numpy.packb(request))
+                    request, client_transport = self._make_request(task)
+                    packed_request = msgpack_numpy.packb(request)
+                    client_transport["packed_request_bytes"] = len(packed_request)
+                    connection.send(packed_request)
                     response = msgpack_numpy.unpackb(connection.recv(timeout=task.timeout_s))
                     result = self._parse_response(task, response)
                     self._responses.put(
@@ -226,6 +241,7 @@ class AsyncRTCInferenceWorker:
                             task=task,
                             result=result,
                             round_trip_ms=(time.monotonic() - start_time) * 1000,
+                            client_transport=client_transport,
                         )
                     )
                 except BaseException as error:
@@ -235,6 +251,7 @@ class AsyncRTCInferenceWorker:
                             result=None,
                             round_trip_ms=(time.monotonic() - start_time) * 1000,
                             error=error,
+                            client_transport=client_transport,
                         )
                     )
                     break
@@ -280,7 +297,14 @@ class AsyncRTCInferenceWorker:
                 f"({model_horizon})."
             )
 
-    def _make_request(self, task: InferenceTask) -> dict[str, Any]:
+        supported_codecs = protocol.get("image_transport_codecs")
+        if not isinstance(supported_codecs, list | tuple) or self._image_transport_codec not in supported_codecs:
+            raise ValueError(
+                f"Server does not support --image-transport-codec={self._image_transport_codec!r}; "
+                f"advertised codecs: {supported_codecs!r}."
+            )
+
+    def _make_request(self, task: InferenceTask) -> tuple[dict[str, Any], dict[str, Any]]:
         rtc = None
         if task.prev_chunk_left_over is not None:
             rtc = {
@@ -290,13 +314,25 @@ class AsyncRTCInferenceWorker:
                 "prefix_attention_schedule": self._rtc_prefix_attention_schedule,
                 "max_guidance_weight": self._rtc_max_guidance_weight,
             }
-        return {
-            "protocol": PROTOCOL_NAME,
-            "protocol_version": PROTOCOL_VERSION,
-            "request_id": task.request_id,
-            "observation": task.observation,
-            "rtc": rtc,
-        }
+        wire_observation, client_transport = _image_transport.encode_observation_images(
+            task.observation,
+            codec=self._image_transport_codec,
+            jpeg_quality=self._image_jpeg_quality,
+        )
+        return (
+            {
+                "protocol": PROTOCOL_NAME,
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": task.request_id,
+                "observation": wire_observation,
+                "image_transport": {
+                    "codec": self._image_transport_codec,
+                    "jpeg_quality": self._image_jpeg_quality,
+                },
+                "rtc": rtc,
+            },
+            client_transport,
+        )
 
     def _parse_response(self, task: InferenceTask, response: Any) -> dict[str, Any]:
         if not isinstance(response, dict):
@@ -396,6 +432,8 @@ class AsyncRTCPolicyAgent(_agent.Agent):
             timeout_s=self._warmup_timeout_s,
         )
         baseline_response = self._submit_and_wait(baseline_task, self._warmup_timeout_s)
+        if self._debug_timing:
+            self._log_transport_response(baseline_response, phase="baseline_warmup")
         self._install_initial_result(baseline_response.result)
 
         if self._rtc_enabled and self._warmup_rtc:
@@ -407,7 +445,9 @@ class AsyncRTCPolicyAgent(_agent.Agent):
                 prev_chunk_left_over=np.array(self._active_actions, copy=True),
                 timeout_s=self._warmup_timeout_s,
             )
-            self._submit_and_wait(rtc_task, self._warmup_timeout_s)
+            rtc_response = self._submit_and_wait(rtc_task, self._warmup_timeout_s)
+            if self._debug_timing:
+                self._log_transport_response(rtc_response, phase="rtc_warmup")
         logger.info("Async inference warmup complete; starting control actions")
 
     def _submit_online_request(self, observation: dict) -> None:
@@ -478,6 +518,29 @@ class AsyncRTCPolicyAgent(_agent.Agent):
                 response.round_trip_ms,
                 server_ms,
             )
+            self._log_transport_response(response, phase="online")
+
+    def _log_transport_response(self, response: InferenceResponse, *, phase: str) -> None:
+        client = response.client_transport or {}
+        result = response.result if isinstance(response.result, dict) else {}
+        server_timing = result.get("server_timing", {})
+        raw_bytes = int(client.get("raw_image_bytes", 0))
+        wire_bytes = int(client.get("wire_image_bytes", 0))
+        compression_ratio = raw_bytes / wire_bytes if wire_bytes else float("nan")
+        logger.info(
+            "ASYNC_RTC transport phase=%s request=%d codec=%s request_kib=%.1f "
+            "images_raw_kib=%.1f images_wire_kib=%.1f ratio=%.2f "
+            "encode_ms=%.1f decode_ms=%.1f",
+            phase,
+            response.task.request_id,
+            client.get("codec", "unknown"),
+            int(client.get("packed_request_bytes", 0)) / 1024,
+            raw_bytes / 1024,
+            wire_bytes / 1024,
+            compression_ratio,
+            float(client.get("encode_ms", float("nan"))),
+            float(server_timing.get("image_decode_ms", float("nan"))),
+        )
 
     def _check_inference_deadline(self) -> None:
         if self._inflight_task is None:
@@ -579,9 +642,15 @@ def _validate_rtc_args(args: Args) -> None:
         raise ValueError("--rtc-max-guidance-weight must be positive.")
 
 
+def _validate_image_transport_args(args: Args) -> None:
+    if not 1 <= args.image_jpeg_quality <= 100:
+        raise ValueError("--image-jpeg-quality must be in [1, 100].")
+
+
 def main(args: Args) -> None:
     if args.rtc_enabled:
         _validate_rtc_args(args)
+    _validate_image_transport_args(args)
 
     worker = AsyncRTCInferenceWorker(
         args.host,
@@ -591,6 +660,8 @@ def main(args: Args) -> None:
         rtc_execution_horizon=args.rtc_execution_horizon,
         rtc_prefix_attention_schedule=args.rtc_prefix_attention_schedule,
         rtc_max_guidance_weight=args.rtc_max_guidance_weight,
+        image_transport_codec=args.image_transport_codec,
+        image_jpeg_quality=args.image_jpeg_quality,
     )
     try:
         _run_robot(args, worker)

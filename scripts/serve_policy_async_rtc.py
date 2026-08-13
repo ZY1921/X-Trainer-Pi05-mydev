@@ -13,11 +13,14 @@ import time
 import traceback
 from typing import Any
 
+from openpi_client import image_transport as _image_transport
 from openpi_client import msgpack_numpy
 import tyro
 import websockets.asyncio.server as _server
 import websockets.frames
 
+from openpi.policies import diagnostics as _diagnostics
+from openpi.policies import policy as _policy
 from openpi.policies import policy_config as _policy_config
 from openpi.training import config as _config
 
@@ -27,7 +30,7 @@ else:
     import serve_policy as _serve_policy
 
 PROTOCOL_NAME = "openpi-async-rtc"
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +79,15 @@ def run_inference_request(policy: Any, request: dict[str, Any]) -> dict[str, Any
     if not isinstance(request_id, int) or request_id < 0:
         raise ValueError(f"request_id must be a non-negative integer, got {request_id!r}.")
 
-    observation = _require_dict(request.get("observation"), "observation")
+    wire_observation = _require_dict(request.get("observation"), "observation")
+    transport = _require_dict(request.get("image_transport"), "image_transport")
+    codec = transport.get("codec")
+    if codec not in ("raw", "jpeg"):
+        raise ValueError(f"Unsupported image transport codec: {codec!r}.")
+    observation, image_transport_stats = _image_transport.decode_observation_images(
+        wire_observation,
+        codec=codec,
+    )
     infer_kwargs: dict[str, Any] = {}
     rtc = request.get("rtc")
     if rtc is not None:
@@ -102,7 +113,11 @@ def run_inference_request(policy: Any, request: dict[str, Any]) -> dict[str, Any
     start_time = time.monotonic()
     result = policy.infer(observation, **infer_kwargs)
     infer_ms = (time.monotonic() - start_time) * 1000
-    result["server_timing"] = {"infer_ms": infer_ms}
+    result["server_timing"] = {
+        "image_decode_ms": image_transport_stats["decode_ms"],
+        "infer_ms": infer_ms,
+    }
+    result["image_transport"] = image_transport_stats
     return {
         "protocol": PROTOCOL_NAME,
         "protocol_version": PROTOCOL_VERSION,
@@ -123,6 +138,7 @@ class AsyncRTCPolicyServer:
             "model_action_horizon": _policy_attribute(policy, "action_horizon"),
             "model_action_dim": _policy_attribute(policy, "action_dim"),
             "rtc_supported": not _policy_attribute(policy, "_is_pytorch_model", default=False),
+            "image_transport_codecs": ["raw", "jpeg"],
         }
         logging.getLogger("websockets.server").setLevel(logging.INFO)
 
@@ -187,8 +203,6 @@ def main(args: Args) -> None:
     metadata = policy.metadata
 
     if args.debug_policy_diagnostics:
-        from openpi.policies import diagnostics as _diagnostics
-
         policy = _diagnostics.PolicyDiagnosticsWrapper(
             policy,
             interval=args.debug_policy_interval,
@@ -196,8 +210,6 @@ def main(args: Args) -> None:
         )
 
     if args.record:
-        from openpi.policies import policy as _policy
-
         policy = _policy.PolicyRecorder(policy, "policy_records")
 
     server = AsyncRTCPolicyServer(policy, host="0.0.0.0", port=args.port, metadata=metadata)
