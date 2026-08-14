@@ -1,4 +1,5 @@
 openpi-client
+matplotlib
 numpy
 tyro
 pyrealsense2

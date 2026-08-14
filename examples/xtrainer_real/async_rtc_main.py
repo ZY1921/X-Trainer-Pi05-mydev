@@ -26,6 +26,7 @@ import websockets.sync.client
 from examples.xtrainer_real import diagnostics as _diagnostics
 from examples.xtrainer_real import env as _env
 from examples.xtrainer_real import image_preprocessing as _image_preprocessing
+from examples.xtrainer_real import inference_action_recorder as _action_recorder
 from examples.xtrainer_real import main as _sync_main
 
 PROTOCOL_NAME = "openpi-async-rtc"
@@ -119,6 +120,15 @@ class Args(_sync_main.Args):
 
     image_jpeg_quality: int = 90
     """JPEG quality used when --image-transport-codec=jpeg."""
+
+    record_inference_actions: bool = True
+    """Save received action chunks, selected actions, metadata, and a plot."""
+
+    inference_action_output_dir: str = "output"
+    """Root directory for timestamped inference action recording directories."""
+
+    inference_action_plot_start_index: int = 7
+    """First action dimension shown in the generated plot; 7 selects the right arm."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -363,6 +373,7 @@ class AsyncRTCPolicyAgent(_agent.Agent):
         warmup_timeout_s: float,
         warmup_rtc: bool,
         debug_timing: bool,
+        action_recorder: _action_recorder.InferenceActionRecorder | None = None,
     ) -> None:
         self._worker = worker
         self._request_interval = request_interval
@@ -372,6 +383,7 @@ class AsyncRTCPolicyAgent(_agent.Agent):
         self._warmup_timeout_s = warmup_timeout_s
         self._warmup_rtc = warmup_rtc
         self._debug_timing = debug_timing
+        self._action_recorder = action_recorder
 
         self._episode_id = -1
         self._next_request_id = 0
@@ -380,6 +392,7 @@ class AsyncRTCPolicyAgent(_agent.Agent):
         self._active_result: dict[str, Any] | None = None
         self._active_actions: np.ndarray | None = None
         self._active_action_index = 0
+        self._active_request_id: int | None = None
         self._inflight_task: InferenceTask | None = None
 
         self._validate_config()
@@ -393,6 +406,7 @@ class AsyncRTCPolicyAgent(_agent.Agent):
         self._active_result = None
         self._active_actions = None
         self._active_action_index = 0
+        self._active_request_id = None
         self._inflight_task = None
 
     @override
@@ -413,6 +427,16 @@ class AsyncRTCPolicyAgent(_agent.Agent):
             )
 
         action = np.array(self._active_actions[self._active_action_index], copy=True)
+        if self._action_recorder is not None:
+            if self._active_request_id is None:
+                raise RuntimeError("The active action chunk does not have a request ID.")
+            self._action_recorder.record_selected_action(
+                action,
+                episode_id=self._episode_id,
+                step=self._step,
+                request_id=self._active_request_id,
+                chunk_index=self._active_action_index,
+            )
         result = {"actions": action}
         if self._active_result is not None:
             for timing_key in ("policy_timing", "server_timing", "async_timing"):
@@ -434,7 +458,14 @@ class AsyncRTCPolicyAgent(_agent.Agent):
         baseline_response = self._submit_and_wait(baseline_task, self._warmup_timeout_s)
         if self._debug_timing:
             self._log_transport_response(baseline_response, phase="baseline_warmup")
-        self._install_initial_result(baseline_response.result)
+        self._record_response(
+            baseline_response,
+            phase="baseline_warmup",
+            arrival_step=0,
+            actual_delay_steps=0,
+            installed=True,
+        )
+        self._install_initial_result(baseline_response.result, request_id=baseline_task.request_id)
 
         if self._rtc_enabled and self._warmup_rtc:
             assert self._active_actions is not None
@@ -448,6 +479,13 @@ class AsyncRTCPolicyAgent(_agent.Agent):
             rtc_response = self._submit_and_wait(rtc_task, self._warmup_timeout_s)
             if self._debug_timing:
                 self._log_transport_response(rtc_response, phase="rtc_warmup")
+            self._record_response(
+                rtc_response,
+                phase="rtc_warmup",
+                arrival_step=0,
+                actual_delay_steps=0,
+                installed=False,
+            )
         logger.info("Async inference warmup complete; starting control actions")
 
     def _submit_online_request(self, observation: dict) -> None:
@@ -505,7 +543,15 @@ class AsyncRTCPolicyAgent(_agent.Agent):
         self._active_result = result
         self._active_actions = actions
         self._active_action_index = actual_delay_steps
+        self._active_request_id = response.task.request_id
         self._inflight_task = None
+        self._record_response(
+            response,
+            phase="online",
+            arrival_step=self._step,
+            actual_delay_steps=actual_delay_steps,
+            installed=True,
+        )
 
         if self._debug_timing:
             server_ms = result.get("server_timing", {}).get("infer_ms", float("nan"))
@@ -540,6 +586,35 @@ class AsyncRTCPolicyAgent(_agent.Agent):
             compression_ratio,
             float(client.get("encode_ms", float("nan"))),
             float(server_timing.get("image_decode_ms", float("nan"))),
+        )
+
+    def _record_response(
+        self,
+        response: InferenceResponse,
+        *,
+        phase: str,
+        arrival_step: int,
+        actual_delay_steps: int,
+        installed: bool,
+    ) -> None:
+        if self._action_recorder is None or not isinstance(response.result, dict):
+            return
+        actions = response.result.get("actions")
+        if actions is None:
+            return
+        server_infer_ms = float(response.result.get("server_timing", {}).get("infer_ms", float("nan")))
+        self._action_recorder.record_received_chunk(
+            np.asarray(actions),
+            phase=phase,
+            request_id=response.task.request_id,
+            episode_id=response.task.episode_id,
+            request_step=response.task.request_step,
+            arrival_step=arrival_step,
+            actual_delay_steps=actual_delay_steps,
+            rtc_enabled=response.task.prev_chunk_left_over is not None,
+            installed=installed,
+            round_trip_ms=response.round_trip_ms,
+            server_infer_ms=server_infer_ms,
         )
 
     def _check_inference_deadline(self) -> None:
@@ -580,11 +655,12 @@ class AsyncRTCPolicyAgent(_agent.Agent):
             raise RuntimeError(f"Inference request {task.request_id} failed.") from response.error
         return response
 
-    def _install_initial_result(self, result: dict[str, Any] | None) -> None:
+    def _install_initial_result(self, result: dict[str, Any] | None, *, request_id: int) -> None:
         result, actions = self._validated_result(result)
         self._active_result = result
         self._active_actions = actions
         self._active_action_index = 0
+        self._active_request_id = request_id
 
     def _validated_result(self, result: dict[str, Any] | None) -> tuple[dict[str, Any], np.ndarray]:
         if not isinstance(result, dict):
@@ -645,6 +721,8 @@ def _validate_rtc_args(args: Args) -> None:
 def _validate_image_transport_args(args: Args) -> None:
     if not 1 <= args.image_jpeg_quality <= 100:
         raise ValueError("--image-jpeg-quality must be in [1, 100].")
+    if args.inference_action_plot_start_index < 0:
+        raise ValueError("--inference-action-plot-start-index must be non-negative.")
 
 
 def main(args: Args) -> None:
@@ -672,6 +750,17 @@ def main(args: Args) -> None:
 def _run_robot(args: Args, worker: AsyncRTCInferenceWorker) -> None:
     metadata = worker.metadata
     logger.info("Server metadata: %s", metadata)
+
+    action_recorder = None
+    if args.record_inference_actions:
+        mode = "async_rtc" if args.rtc_enabled else "async_baseline"
+        action_recorder = _action_recorder.InferenceActionRecorder(
+            args.inference_action_output_dir,
+            mode=mode,
+            plot_start_index=args.inference_action_plot_start_index,
+            config=dataclasses.asdict(args),
+        )
+        logger.info("Recording inference actions in %s", action_recorder.output_dir)
 
     environment = RightArmOnlyEnvironment(
         left_robot_ip=args.left_robot_ip,
@@ -715,6 +804,7 @@ def _run_robot(args: Args, worker: AsyncRTCInferenceWorker) -> None:
             warmup_timeout_s=args.warmup_timeout_s,
             warmup_rtc=args.warmup_rtc,
             debug_timing=args.debug_async_timing,
+            action_recorder=action_recorder,
         )
         runtime = _runtime.Runtime(
             environment=environment,
@@ -726,7 +816,11 @@ def _run_robot(args: Args, worker: AsyncRTCInferenceWorker) -> None:
         )
         runtime.run()
     finally:
-        environment.close()
+        try:
+            environment.close()
+        finally:
+            if action_recorder is not None:
+                action_recorder.save()
 
 
 if __name__ == "__main__":

@@ -71,6 +71,22 @@ Useful optional arguments:
 - `--control-hz`
 - `--action-horizon`
 
+## Inference action recording and plots
+
+`right_arm_main.py` and `async_rtc_main.py` record inference actions by default. This works for synchronous inference,
+asynchronous RTC, and the asynchronous non-RTC baseline. Each run creates a timestamped directory under `output/`
+containing:
+
+- `actions.npz`: complete received action chunks, selected per-step actions, request IDs, delays, and timing metadata.
+- `received_chunks.csv`: one row per action in every server response.
+- `selected_actions.csv`: the action selected by the control loop at every step.
+- `summary.json`: chunk-switch counts and boundary action-jump statistics.
+- `actions.png`: received chunks, selected right-arm actions, and chunk-switch markers.
+
+Use `--inference-action-output-dir <dir>` to change the output root, or `--no-record-inference-actions` to disable this
+feature. The plot starts at action dimension 7 by default so it shows the model-controlled right arm; change it with
+`--inference-action-plot-start-index`.
+
 ## Notes
 
 - The client sends observations with keys:
