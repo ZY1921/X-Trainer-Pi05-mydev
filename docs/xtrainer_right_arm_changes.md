@@ -1,5 +1,24 @@
 # X-Trainer 修改日志
 
+## 客户端入口总览
+
+当前 X-Trainer 有三个实机推理客户端入口。它们使用的服务协议、图像处理、可视化和动作执行范围如下。
+
+| 客户端脚本 | 推理与服务协议 | 客户端图像处理 | 实时相机可视化 | 图像网络传输 | 动作执行范围 | 运行日志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `examples/xtrainer_real/main.py` | 同步推理；连接标准 `serve_policy.py` | 基础环境执行 `resize_with_pad(render_height, render_width)`；默认直接得到 `224×224`；不调用 `match_legacy_dataset_images()` | 无 | 原始 NumPy 图像通过 msgpack 传输 | 不屏蔽任何一侧；左臂 `[0:7]` 和右臂 `[7:14]` 都执行模型输出 | 标准连接、服务端元数据和运行状态日志 |
+| `examples/xtrainer_real/right_arm_main.py` | 同步推理；连接标准 `serve_policy.py` | 基础处理后调用 `match_legacy_dataset_images()`；要求 `--render-height 480 --render-width 640` | 有；横向显示 `top | left wrist | right wrist`，按 `Q`、`Esc` 或关闭窗口停止 | 原始 NumPy 图像通过 msgpack 传输 | 屏蔽左臂模型输出：`[0:7]` 固定为 reset 后状态；右臂 `[7:14]` 执行模型输出 | 将覆盖前的完整 14 维模型动作写入 `output/inference_actions_<timestamp>.log` |
+| `examples/xtrainer_real/async_rtc_main.py` | 异步动作块推理；连接 `serve_policy_async_rtc.py`；协议 `openpi-async-rtc` v2；默认启用 RTC | 基础处理后调用 `match_legacy_dataset_images()`；要求 `--render-height 480 --render-width 640` | 无 | 默认 JPEG quality 90；可用 `--image-transport-codec raw` 回退 | 屏蔽左臂模型输出：`[0:7]` 固定为 reset 后状态；右臂 `[7:14]` 执行模型输出 | 使用 `--debug-async-timing` 输出延迟、请求大小、JPEG 压缩比和编解码耗时 |
+
+动作索引统一为：
+
+- `[0:6]`：左臂关节 1～6。
+- `[6]`：左夹爪。
+- `[7:13]`：右臂关节 1～6。
+- `[13]`：右夹爪。
+
+目前没有客户端屏蔽右臂 `[7:14]`。`right_arm_main.py` 和 `async_rtc_main.py` 的“右臂单臂执行”含义是保留右臂模型输出、覆盖左臂 `[0:7]`；`main.py` 则执行完整的双臂模型输出。
+
 ## 第一次日志记录：右臂单臂执行与图像预处理
 
 对应提交：`e9c9ed1`（完善 X-Trainer 右臂单臂执行与图像预处理）
