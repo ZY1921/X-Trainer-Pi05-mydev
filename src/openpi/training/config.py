@@ -22,6 +22,7 @@ import openpi.policies.atom_policy as atom_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.policies.xtrainer_policy as xtrainer_policy
+import openpi.policies.xtrainer_right_arm_policy as xtrainer_right_arm_policy
 import openpi.shared.download as _download
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.shared.normalize as _normalize
@@ -518,6 +519,92 @@ class LeRobotXTrainerDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class XTrainerRightArmModelTransformFactory(GroupFactory):
+    """Build Pi0.5 transforms while preserving the pretrained right-arm slots."""
+
+    default_prompt: str | None = None
+
+    def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
+        if model_config.model_type != ModelType.PI05:
+            raise ValueError("The X-Trainer right-arm pipeline currently supports Pi0.5 only.")
+        assert isinstance(model_config, pi0_config.Pi0Config)
+        return _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(self.default_prompt),
+                _transforms.ResizeImages(224, 224),
+                xtrainer_right_arm_policy.PackRightArmToModelSlots(),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input,
+                ),
+                _transforms.PadStatesAndActions(model_config.action_dim),
+            ],
+            outputs=[xtrainer_right_arm_policy.UnpackRightArmFromModelSlots()],
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotXTrainerRightArmDataConfig(DataConfigFactory):
+    """LeRobot config for 7D right-arm state/actions with top and right-wrist images."""
+
+    use_delta_joint_actions: bool = True
+    default_prompt: str | None = None
+    repack_transforms: tyro.conf.Suppress[_transforms.Group] = dataclasses.field(
+        default=_transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation.state": "observation.state",
+                        "observation.images.top": "observation.images.top",
+                        "observation.images.right_wrist": "observation.images.right_wrist",
+                        "actions": "action",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+    )
+    action_sequence_keys: Sequence[str] = ("action",)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        base_config = self.create_base_config(assets_dirs, model_config)
+        self._validate_norm_stats(base_config.norm_stats)
+        data_transforms = _transforms.Group(
+            inputs=[xtrainer_right_arm_policy.XTrainerRightArmInputs()],
+            outputs=[xtrainer_right_arm_policy.XTrainerRightArmOutputs()],
+        )
+        if self.use_delta_joint_actions:
+            delta_action_mask = _transforms.make_bool_mask(6, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        return dataclasses.replace(
+            base_config,
+            repack_transforms=self.repack_transforms,
+            data_transforms=data_transforms,
+            model_transforms=XTrainerRightArmModelTransformFactory(self.default_prompt)(model_config),
+            action_sequence_keys=self.action_sequence_keys,
+        )
+
+    @staticmethod
+    def _validate_norm_stats(norm_stats: dict[str, _transforms.NormStats] | None) -> None:
+        if norm_stats is None:
+            return
+        for key in ("state", "actions"):
+            if key not in norm_stats:
+                raise ValueError(f"Right-arm norm stats are missing key {key!r}.")
+            shape = norm_stats[key].mean.shape
+            if not shape or shape[-1] != xtrainer_right_arm_policy.PHYSICAL_ACTION_DIM:
+                raise ValueError(
+                    f"Right-arm norm stats {key!r} must have dimension "
+                    f"{xtrainer_right_arm_policy.PHYSICAL_ACTION_DIM}, got shape {shape}."
+                )
+
+
+@dataclasses.dataclass(frozen=True)
 class LeRobotAtomDataConfig(DataConfigFactory):
     # If true, convert the 14 arm dimensions to delta actions and keep hands/head absolute.
     use_delta_joint_actions: bool = True
@@ -662,6 +749,17 @@ class TrainConfig:
     def __post_init__(self) -> None:
         if self.resume and self.overwrite:
             raise ValueError("Cannot resume and overwrite at the same time.")
+
+
+def _xtrainer_right_arm_policy_metadata() -> dict[str, Any]:
+    return {
+        "robot_side": "right",
+        "physical_action_dim": xtrainer_right_arm_policy.PHYSICAL_ACTION_DIM,
+        "model_action_start_index": xtrainer_right_arm_policy.MODEL_RIGHT_ARM_START,
+        "model_action_end_index": xtrainer_right_arm_policy.MODEL_RIGHT_ARM_END,
+        "camera_keys": ["observation.images.top", "observation.images.right_wrist"],
+        "reset_pose": [1.57, 0.0, 1.57, 0.0, -1.57, -1.01, 1.0],
+    }
 
 
 # Use `get_config` if you need to get a config by name in your code.
@@ -833,6 +931,73 @@ _CONFIGS = [
                 1.0,
             ]
         },
+    ),
+    # Right-arm-only X-Trainer configs. Physical state/actions are 7D, while
+    # model-space values remain in the pretrained right-arm slots [7:14].
+    TrainConfig(
+        name="pi05_xtrainer_right_arm_custom",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotXTrainerRightArmDataConfig(
+            assets=AssetsConfig(asset_id="xtrainer_right_arm"),
+        ),
+        policy_metadata=_xtrainer_right_arm_policy_metadata(),
+    ),
+    TrainConfig(
+        name="pi05_xtrainer_right_arm_finetune",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotXTrainerRightArmDataConfig(
+            repo_id="your_hf_username/my_xtrainer_right_arm_dataset",
+            assets=AssetsConfig(asset_id="xtrainer_right_arm"),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/home/dobot/gbw/openpi-assets/checkpoints/pi05_base/params"
+        ),
+        num_train_steps=20_000,
+        batch_size=32,
+        policy_metadata=_xtrainer_right_arm_policy_metadata(),
+    ),
+    TrainConfig(
+        name="pi05_xtrainer_right_arm_lora_finetune",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotXTrainerRightArmDataConfig(
+            repo_id="your_hf_username/my_xtrainer_right_arm_dataset",
+            assets=AssetsConfig(asset_id="xtrainer_right_arm"),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/home/dobot/gbw/openpi-assets/checkpoints/pi05_base/params"
+        ),
+        num_train_steps=20_000,
+        batch_size=8,
+        freeze_filter=nnx.All(nnx.Param, nnx.Not(nnx_utils.PathRegex(".*lora.*"))),
+        ema_decay=None,
+        policy_metadata=_xtrainer_right_arm_policy_metadata(),
+    ),
+    TrainConfig(
+        name="pi05_xtrainer_right_arm_lora_r64_finetune",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora_r64",
+            action_expert_variant="gemma_300m_lora_r64",
+        ),
+        data=LeRobotXTrainerRightArmDataConfig(
+            repo_id="your_hf_username/my_xtrainer_right_arm_dataset",
+            assets=AssetsConfig(asset_id="xtrainer_right_arm"),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/home/dobot/gbw/openpi-assets/checkpoints/pi05_base/params"
+        ),
+        num_train_steps=40_000,
+        batch_size=8,
+        freeze_filter=nnx.All(nnx.Param, nnx.Not(nnx_utils.PathRegex(".*lora.*"))),
+        ema_decay=None,
+        policy_metadata=_xtrainer_right_arm_policy_metadata(),
     ),
     #
     # Inference / fine-tuning Atom configs.

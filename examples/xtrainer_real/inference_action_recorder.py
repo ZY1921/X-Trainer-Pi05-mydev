@@ -381,6 +381,17 @@ class InferenceActionRecorder:
 
     @staticmethod
     def _action_name(action_index: int, action_dim: int) -> str:
+        if action_dim == 7:
+            names = [
+                "right_joint_1",
+                "right_joint_2",
+                "right_joint_3",
+                "right_joint_4",
+                "right_joint_5",
+                "right_joint_6",
+                "right_gripper",
+            ]
+            return names[action_index]
         if action_dim == 14:
             names = [
                 "left_joint_1",
