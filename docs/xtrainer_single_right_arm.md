@@ -1,6 +1,6 @@
 # X-Trainer 单右臂数据、训练与推理流程
 
-- 修改日期：2026-08-20
+- 修改日期：2026-09-01
 - 适用模型：Pi0.5
 - 物理设备：Dobot X-Trainer 右臂、top 相机、right wrist 相机
 
@@ -14,6 +14,7 @@
 - 训练时仍把右臂放入预训练模型原有的 `[7:14]` 槽位，保持 Pi0.5 双臂预训练语义。
 - 部署时只连接和控制右臂，只初始化 top、right wrist 两个相机。
 - 新增同步推理和异步 RTC 推理入口，原有双臂入口保持不变。
+- 支持把多个单任务 LeRobot v2.1 目录安全合并为一个语言条件多任务数据集。
 
 新数据集接口如下：
 
@@ -164,7 +165,30 @@ python examples/xtrainer_real/convert_raw_right_arm_to_lerobot_2_1.py \
 
 转换后的目录需要放到当前 LeRobot 数据缓存可识别的位置，或上传为一个 dataset repo。后续命令中的 `<dataset_repo_id>` 必须指向这个新单右臂数据集，不能指向原 14 维双臂数据集。
 
-### 3.3 检查基础 checkpoint 路径
+### 3.3 合并多个右臂任务
+
+每个任务先单独完成转换，再按命令中的顺序合并。例如先放红按钮、再放绿按钮，合并后它们的 `task_index` 分别为 0 和 1：
+
+```bash
+python examples/xtrainer_real/merge_right_arm_lerobot_2_1.py \
+  --input_roots \
+    <red_button_lerobot_root> \
+    <green_button_lerobot_root> \
+  --output_root <right_arm_multitask_lerobot_root> \
+  --media_mode auto
+```
+
+合并脚本会：
+
+- 检查每个输入均为完整的 LeRobot v2.1 视频数据集，且只包含一个任务。
+- 检查 FPS、7 维状态/动作、top 和 right wrist 相机及 feature schema 完全一致。
+- 重写全局 `index`、`episode_index`、`task_index`、episode metadata 和 dataset stats。
+- 默认优先硬链接视频；无法硬链接时自动复制。输入数据不会被修改。
+- 在输出目录已存在时拒绝运行；确认需要替换时显式增加 `--overwrite_output`。
+
+不同任务的 prompt 必须不同。合并完成后，后续 norm stats 和训练命令中的 `<dataset_repo_id>` 都使用合并输出目录。当前红、绿按钮数据的平均 episode 长度接近，直接使用普通 shuffle 即可，不需要额外的任务均衡采样器。
+
+### 3.4 检查基础 checkpoint 路径
 
 三个训练配置当前沿用了仓库内原 X-Trainer 配置的 Pi0.5 base 权重路径：
 
@@ -174,7 +198,7 @@ python examples/xtrainer_real/convert_raw_right_arm_to_lerobot_2_1.py \
 
 如果本机路径不同，训练前需要在 `src/openpi/training/config.py` 中将对应 `CheckpointWeightLoader` 改成实际的 Pi0.5 base params 路径。
 
-### 3.4 计算 7 维 norm stats
+### 3.5 计算 7 维 norm stats
 
 norm stats 必须使用准备训练的同一个配置计算。以 LoRA 为例：
 
@@ -194,7 +218,7 @@ pi05_xtrainer_right_arm_finetune
 
 生成的 stats 中 `state` 和 `actions` 都应为 7 维。不要复用原 `xtrainer` 的 14 维 norm stats。
 
-### 3.5 启动训练
+### 3.6 启动训练
 
 LoRA 示例：
 
@@ -210,7 +234,7 @@ uv run scripts/training/train.py \
 
 全参数训练使用 `pi05_xtrainer_right_arm_finetune`；R64 LoRA 使用 `pi05_xtrainer_right_arm_lora_r64_finetune`。计算 stats 和训练时的配置名、dataset repo id、asset id 必须保持一致。
 
-### 3.6 同步推理
+### 3.7 同步推理
 
 先在 GPU 机器启动服务。LoRA checkpoint 必须使用对应的 LoRA 配置加载：
 
@@ -250,7 +274,7 @@ python -m examples.xtrainer_real.right_arm_single_main \
   --camera-right-wrist-serial <right_wrist_serial>
 ```
 
-### 3.7 异步 RTC 推理
+### 3.8 异步 RTC 推理
 
 在 GPU 机器启动异步 RTC 服务：
 
