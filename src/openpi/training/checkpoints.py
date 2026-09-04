@@ -41,14 +41,19 @@ def initialize_checkpoint_dir(
         checkpoint_dir,
         item_handlers={
             "assets": CallbackHandler(),
-            "train_state": ocp.PyTreeCheckpointHandler(),
-            "params": ocp.PyTreeCheckpointHandler(),
+            # Bound device-to-host staging during full-parameter checkpoint saves. Without
+            # this limit, Orbax may stage tens of GiB concurrently and exceed the host's
+            # memory cgroup limit.
+            "train_state": ocp.PyTreeCheckpointHandler(save_concurrent_gb=1),
+            "params": ocp.PyTreeCheckpointHandler(save_concurrent_gb=1),
         },
         options=ocp.CheckpointManagerOptions(
             max_to_keep=1,
             keep_period=keep_period,
             create=False,
-            async_options=ocp.AsyncOptions(timeout_secs=7200),
+            # Wait for a checkpoint to finish before resuming training so checkpoint
+            # staging and the next training step do not overlap in host memory.
+            enable_async_checkpointing=False,
         ),
     )
 
