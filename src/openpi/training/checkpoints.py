@@ -16,6 +16,58 @@ import openpi.shared.normalize as _normalize
 import openpi.training.data_loader as _data_loader
 import openpi.training.utils as training_utils
 
+_CHECKPOINT_IO_CONCURRENT_GB = 6
+
+
+class _SynchronousPyTreeCheckpointHandler(ocp.CheckpointHandler):
+    """Runs an Orbax PyTree handler as a blocking composite-checkpoint item.
+
+    Orbax starts all ``AsyncCheckpointHandler`` items in a composite checkpoint
+    together. Pi0.5 stores the optimizer state and inference parameters as two
+    large items, so doing that can stage both trees in host memory at once. This
+    wrapper deliberately exposes the PyTree handler as a blocking handler, which
+    makes the composite handler finish one item before starting the next.
+    """
+
+    def __init__(self):
+        # The limiter must be larger than the largest individual array. The
+        # current Pi0.5 model has a 4,831,838,208-byte float32 parameter.
+        self._handler = ocp.PyTreeCheckpointHandler(
+            save_concurrent_gb=_CHECKPOINT_IO_CONCURRENT_GB,
+            restore_concurrent_gb=_CHECKPOINT_IO_CONCURRENT_GB,
+            # Unlike save_concurrent_gb, this also bounds device-to-host
+            # staging. This prevents a full train-state PyTree from being
+            # materialized in host memory before TensorStore starts writing.
+            save_device_host_concurrent_gb=_CHECKPOINT_IO_CONCURRENT_GB,
+        )
+
+    def save(self, directory: epath.Path, args: _SynchronousPyTreeSave):
+        return self._handler.save(directory, args=args)
+
+    def restore(self, directory: epath.Path, args: _SynchronousPyTreeRestore):
+        return self._handler.restore(directory, args=args)
+
+    def metadata(self, directory: epath.Path):
+        return self._handler.metadata(directory)
+
+    def finalize(self, directory: epath.Path) -> None:
+        self._handler.finalize(directory)
+
+    def close(self) -> None:
+        self._handler.close()
+
+
+@ocp.args.register_with_handler(_SynchronousPyTreeCheckpointHandler, for_save=True)
+@dataclasses.dataclass
+class _SynchronousPyTreeSave(ocp.args.PyTreeSave):
+    pass
+
+
+@ocp.args.register_with_handler(_SynchronousPyTreeCheckpointHandler, for_restore=True)
+@dataclasses.dataclass
+class _SynchronousPyTreeRestore(ocp.args.PyTreeRestore):
+    pass
+
 
 def initialize_checkpoint_dir(
     checkpoint_dir: epath.Path | str, *, keep_period: int | None, overwrite: bool, resume: bool
@@ -41,11 +93,11 @@ def initialize_checkpoint_dir(
         checkpoint_dir,
         item_handlers={
             "assets": CallbackHandler(),
-            # Bound device-to-host staging during full-parameter checkpoint saves. Without
-            # this limit, Orbax may stage tens of GiB concurrently and exceed the host's
-            # memory cgroup limit.
-            "train_state": ocp.PyTreeCheckpointHandler(save_concurrent_gb=1),
-            "params": ocp.PyTreeCheckpointHandler(save_concurrent_gb=1),
+            # CompositeCheckpointHandler normally starts all async item handlers
+            # together. Blocking wrappers make the two large trees transfer to host
+            # and save one at a time instead.
+            "train_state": _SynchronousPyTreeCheckpointHandler(),
+            "params": _SynchronousPyTreeCheckpointHandler(),
         },
         options=ocp.CheckpointManagerOptions(
             max_to_keep=1,
