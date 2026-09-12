@@ -12,10 +12,11 @@ from openpi_client.runtime import runtime as _runtime
 from typing_extensions import override
 import tyro
 
-from examples.xtrainer_real import async_rtc_main as _async_base
+from examples.xtrainer_real import bimanual_async_rtc_main as _async_base
+from examples.xtrainer_real import camera_visualization as _camera_visualization
 from examples.xtrainer_real import diagnostics as _diagnostics
-from examples.xtrainer_real import image_preprocessing as _image_preprocessing
 from examples.xtrainer_real import inference_action_recorder as _action_recorder
+from examples.xtrainer_real import inference_environment as _inference_environment
 from examples.xtrainer_real import right_arm_env as _right_arm_env
 from examples.xtrainer_real import right_arm_single_main as _sync_right_arm
 
@@ -39,14 +40,8 @@ class Args(_sync_right_arm.Args):
     image_jpeg_quality: int = 90
 
 
-class PreprocessedRightArmEnvironment(_right_arm_env.XTrainerRightArmRealEnvironment):
-    @override
-    def get_observation(self) -> dict:
-        observation = super().get_observation()
-        return _image_preprocessing.match_legacy_dataset_images(observation)
-
-
 class RightArmAsyncRTCPolicyAgent(_async_base.AsyncRTCPolicyAgent):
+    @override
     def _validated_result(self, result: dict[str, Any] | None) -> tuple[dict[str, Any], np.ndarray]:
         result, actions = super()._validated_result(result)
         if actions.shape[-1] != _right_arm_env.PHYSICAL_ACTION_DIM:
@@ -94,7 +89,7 @@ def _run_robot(args: Args, worker: _async_base.AsyncRTCInferenceWorker) -> None:
             config=dataclasses.asdict(args),
         )
 
-    environment = PreprocessedRightArmEnvironment(
+    environment = _inference_environment.RightArmInferenceEnvironment(
         right_robot_ip=args.right_robot_ip,
         right_gripper_port=args.right_gripper_port,
         right_gripper_id=args.right_gripper_id,
@@ -111,6 +106,7 @@ def _run_robot(args: Args, worker: _async_base.AsyncRTCInferenceWorker) -> None:
         ramp_max_steps=args.ramp_max_steps,
         gripper_update_threshold=args.gripper_update_threshold,
         servo_step_limit=args.servo_step_limit,
+        show_camera_preview=args.show_camera_preview,
     )
     try:
         subscribers = []
@@ -141,7 +137,10 @@ def _run_robot(args: Args, worker: _async_base.AsyncRTCInferenceWorker) -> None:
             num_episodes=args.num_episodes,
             max_episode_steps=args.max_episode_steps,
         )
-        runtime.run()
+        try:
+            runtime.run()
+        except _camera_visualization.CameraPreviewStopRequestedError:
+            logger.info("Camera preview closed; stopping the client.")
     finally:
         try:
             environment.close()

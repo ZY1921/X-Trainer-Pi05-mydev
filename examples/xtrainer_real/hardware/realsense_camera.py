@@ -23,7 +23,7 @@ class RealSenseCamera:
         if self._connected:
             return
 
-        import pyrealsense2 as rs  # noqa: PLC0415
+        import pyrealsense2 as rs
 
         pipeline = rs.pipeline()
         config = rs.config()

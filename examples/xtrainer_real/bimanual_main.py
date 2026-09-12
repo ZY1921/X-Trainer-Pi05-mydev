@@ -1,3 +1,5 @@
+"""Run synchronous inference on the physical bimanual X-Trainer."""
+
 import dataclasses
 import logging
 
@@ -6,6 +8,10 @@ from openpi_client import websocket_client_policy as _websocket_client_policy
 from openpi_client.runtime import runtime as _runtime
 from openpi_client.runtime.agents import policy_agent as _policy_agent
 import tyro
+
+from examples.xtrainer_real import camera_visualization as _camera_visualization
+from examples.xtrainer_real import diagnostics as _diagnostics
+from examples.xtrainer_real import inference_environment as _inference_environment
 
 
 @dataclasses.dataclass
@@ -35,8 +41,10 @@ class Args:
     camera_right_wrist_serial: str = ""
     camera_fps: float = 30.0
 
-    render_height: int = 224
-    render_width: int = 224
+    render_height: int = 480
+    render_width: int = 640
+    show_camera_preview: bool = False
+    """Show the preprocessed camera images. Q, Esc, or closing the window stops the client."""
 
     max_joint_delta: float = 0.17
     ramp_step: float = 0.01
@@ -49,8 +57,8 @@ class Args:
 
 
 def main(args: Args) -> None:
-    from examples.xtrainer_real import diagnostics as _diagnostics
-    from examples.xtrainer_real import env as _env
+    if (args.render_height, args.render_width) != (480, 640):
+        raise ValueError("Bimanual image preprocessing requires --render-height 480 --render-width 640.")
 
     ws_client_policy = _websocket_client_policy.WebsocketClientPolicy(
         host=args.host,
@@ -59,7 +67,7 @@ def main(args: Args) -> None:
     metadata = ws_client_policy.get_server_metadata()
     logging.info("Server metadata: %s", metadata)
 
-    environment = _env.XTrainerRealEnvironment(
+    environment = _inference_environment.BimanualInferenceEnvironment(
         left_robot_ip=args.left_robot_ip,
         right_robot_ip=args.right_robot_ip,
         left_gripper_port=args.left_gripper_port,
@@ -81,6 +89,7 @@ def main(args: Args) -> None:
         ramp_max_steps=args.ramp_max_steps,
         gripper_update_threshold=args.gripper_update_threshold,
         servo_step_limit=args.servo_step_limit,
+        show_camera_preview=args.show_camera_preview,
     )
     subscribers = []
     if args.debug_action_state_diagnostics:
@@ -107,6 +116,8 @@ def main(args: Args) -> None:
 
     try:
         runtime.run()
+    except _camera_visualization.CameraPreviewStopRequestedError:
+        logging.info("Camera preview closed; stopping the client.")
     finally:
         environment.close()
 

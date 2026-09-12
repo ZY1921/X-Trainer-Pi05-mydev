@@ -5,7 +5,6 @@ import logging
 import time
 from typing import Any
 
-import cv2
 import numpy as np
 from openpi_client import action_chunk_broker
 from openpi_client import base_policy as _base_policy
@@ -15,18 +14,14 @@ from openpi_client.runtime import runtime as _runtime
 from typing_extensions import override
 import tyro
 
+from examples.xtrainer_real import camera_visualization as _camera_visualization
 from examples.xtrainer_real import diagnostics as _diagnostics
-from examples.xtrainer_real import image_preprocessing as _image_preprocessing
 from examples.xtrainer_real import inference_action_recorder as _action_recorder
+from examples.xtrainer_real import inference_environment as _inference_environment
 from examples.xtrainer_real import right_arm_env as _right_arm_env
 
 logger = logging.getLogger(__name__)
-_PREVIEW_WINDOW_NAME = "X-Trainer right arm: top | right wrist"
 _EXPECTED_CAMERA_KEYS = ["observation.images.top", "observation.images.right_wrist"]
-
-
-class _PreviewStopRequestedError(Exception):
-    pass
 
 
 @dataclasses.dataclass
@@ -48,6 +43,8 @@ class Args:
     camera_fps: float = 30.0
     render_height: int = 480
     render_width: int = 640
+    show_camera_preview: bool = False
+    """Show the preprocessed camera images. Q, Esc, or closing the window stops the client."""
 
     max_joint_delta: float = 0.17
     ramp_step: float = 0.01
@@ -78,46 +75,6 @@ def validate_right_arm_metadata(metadata: dict[str, Any]) -> None:
         mismatches["reset_pose"] = (metadata.get("reset_pose"), "7 values")
     if mismatches:
         raise ValueError(f"Server checkpoint is not compatible with the right-arm client: {mismatches}")
-
-
-class PreviewRightArmEnvironment(_right_arm_env.XTrainerRightArmRealEnvironment):
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self._preview_window_created = False
-
-    @override
-    def get_observation(self) -> dict:
-        observation = super().get_observation()
-        _image_preprocessing.match_legacy_dataset_images(observation)
-        preview_frames = []
-        for camera_name, label in (("top", "TOP"), ("right_wrist", "RIGHT WRIST")):
-            rgb = observation[f"observation.images.{camera_name}"]
-            bgr = np.ascontiguousarray(rgb[..., ::-1])
-            cv2.putText(bgr, label, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3)
-            cv2.putText(bgr, label, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-            preview_frames.append(bgr)
-
-        preview = np.hstack(preview_frames)
-        if not self._preview_window_created:
-            cv2.namedWindow(_PREVIEW_WINDOW_NAME, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow(_PREVIEW_WINDOW_NAME, preview.shape[1], preview.shape[0])
-            self._preview_window_created = True
-        cv2.imshow(_PREVIEW_WINDOW_NAME, preview)
-        key = cv2.waitKey(1) & 0xFF
-        if key in (ord("q"), ord("Q"), 27) or cv2.getWindowProperty(_PREVIEW_WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
-            raise _PreviewStopRequestedError
-        return observation
-
-    @override
-    def close(self) -> None:
-        if self._preview_window_created:
-            try:
-                cv2.destroyWindow(_PREVIEW_WINDOW_NAME)
-                cv2.waitKey(1)
-            except cv2.error:
-                pass
-            self._preview_window_created = False
-        super().close()
 
 
 class _ValidatedRecordingPolicy(_base_policy.BasePolicy):
@@ -236,7 +193,7 @@ def main(args: Args) -> None:
             config=dataclasses.asdict(args),
         )
 
-    environment = PreviewRightArmEnvironment(
+    environment = _inference_environment.RightArmInferenceEnvironment(
         right_robot_ip=args.right_robot_ip,
         right_gripper_port=args.right_gripper_port,
         right_gripper_id=args.right_gripper_id,
@@ -253,6 +210,7 @@ def main(args: Args) -> None:
         ramp_max_steps=args.ramp_max_steps,
         gripper_update_threshold=args.gripper_update_threshold,
         servo_step_limit=args.servo_step_limit,
+        show_camera_preview=args.show_camera_preview,
     )
     validated_policy = _ValidatedRecordingPolicy(
         ws_client_policy,
@@ -285,7 +243,7 @@ def main(args: Args) -> None:
     )
     try:
         runtime.run()
-    except _PreviewStopRequestedError:
+    except _camera_visualization.CameraPreviewStopRequestedError:
         logger.info("Camera preview closed; stopping the client.")
     finally:
         try:

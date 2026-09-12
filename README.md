@@ -540,7 +540,7 @@ OpenPI 的 `XTrainerInputs` 期望 camera key 为 `top`、`left_wrist`、`right_
 建议使用：
 
 ```bash
-python examples/xtrainer_real/convert_raw_to_lerobot_2_1.py \
+python examples/xtrainer_real/data_convert/convert_raw_to_lerobot_2_1.py \
   --raw_root "$RAW_ROOT" \
   --output_root "$OUTPUT_ROOT" \
   --task "$TASK" \
@@ -1053,7 +1053,7 @@ pyserial
 ```bash
 cd /path/to/workspace/Xtrainer-PI05-feat-xtrainer-finetune
 
-python -m examples.xtrainer_real.main \
+python -m examples.xtrainer_real.bimanual_main \
   --host <policy_server_ip> \
   --port 8000 \
   --prompt "Insert the test tube on the desktop into the rack." \
@@ -1071,7 +1071,7 @@ python -m examples.xtrainer_real.main \
 调试动作与状态差异：
 
 ```bash
-python -m examples.xtrainer_real.main \
+python -m examples.xtrainer_real.bimanual_main \
   --host <policy_server_ip> \
   --port 8000 \
   --prompt "Insert the test tube on the desktop into the rack." \
@@ -1261,7 +1261,10 @@ find ${HF_LEROBOT_HOME:-$HOME/.cache/huggingface/lerobot} -maxdepth 3 -type d | 
 | `docs/remote_inference.md` | OpenPI 远程推理说明。 |
 | `docs/norm_stats.md` | norm stats 说明。 |
 | `examples/xtrainer_real/README.md` | XTrainer real robot 推理说明。 |
-| `examples/xtrainer_real/main.py` | XTrainer 推理 client 主入口。 |
+| `examples/xtrainer_real/bimanual_main.py` | XTrainer 双臂同步推理 client。 |
+| `examples/xtrainer_real/bimanual_async_rtc_main.py` | XTrainer 双臂异步 RTC 推理 client。 |
+| `examples/xtrainer_real/right_arm_single_main.py` | XTrainer 单右臂 7 维同步推理 client。 |
+| `examples/xtrainer_real/right_arm_single_async_rtc_main.py` | XTrainer 单右臂 7 维异步 RTC 推理 client。 |
 | `examples/xtrainer_real/env.py` | XTrainer real environment 与安全执行逻辑。 |
 | `examples/xtrainer_real/hardware/dobot_xtrainer.py` | 推理侧 Dobot follower / gripper / camera 封装。 |
 

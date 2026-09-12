@@ -22,7 +22,7 @@ import shutil
 
 import numpy as np
 
-from examples.xtrainer_real import convert_raw_to_lerobot_2_1 as _base
+from examples.xtrainer_real.data_convert import convert_raw_to_lerobot_2_1 as _base
 
 RIGHT_ARM_SOURCE_SLICE = slice(7, 14)
 RIGHT_ARM_DIM = 7

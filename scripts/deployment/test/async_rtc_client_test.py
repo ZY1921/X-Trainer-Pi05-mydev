@@ -5,7 +5,7 @@ import numpy as np
 from openpi_client import image_transport
 import pytest
 
-from examples.xtrainer_real import async_rtc_main
+from examples.xtrainer_real import bimanual_async_rtc_main as async_rtc_main
 
 
 class _FakeWorker:
@@ -54,6 +54,13 @@ def _make_agent(worker, *, rtc_enabled=True, max_delay=4):
         warmup_rtc=False,
         debug_timing=False,
     )
+
+
+def test_bimanual_agent_rejects_non_14d_actions():
+    agent = object.__new__(async_rtc_main.BimanualAsyncRTCPolicyAgent)
+
+    with pytest.raises(ValueError, match="horizon, 14"):
+        agent._validated_result({"actions": np.zeros((5, 7), dtype=np.float32)})
 
 
 def test_worker_encodes_jpeg_observations_in_request_envelope():

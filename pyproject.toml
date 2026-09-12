@@ -144,7 +144,7 @@ known-third-party = ["wandb"]
 [tool.ruff.lint.per-file-ignores]
 "examples/atom_real/convert_raw_to_lerobot_2_1.py" = ["FBT001", "PLC0206"]
 "examples/atom_real/hardware/atom_upper_control.py" = ["FBT001", "N802", "PERF401", "SIM105", "SIM110"]
-"examples/xtrainer_real/convert_raw_to_lerobot_2_1.py" = ["FBT001", "PLC0206"]
+"examples/xtrainer_real/data_convert/convert_raw_to_lerobot_2_1.py" = ["FBT001", "PLC0206"]
 "src/openpi/training/data_loader.py" = ["SLF001"]
 
 [build-system]

@@ -1,16 +1,20 @@
 import contextlib
 import logging
 import time
-from typing import Optional
 
 import numpy as np
 from openpi_client import image_tools
 from openpi_client.runtime import environment as _environment
 from typing_extensions import override
 
-from examples.xtrainer_real.hardware import DobotXTrainer
-
 logger = logging.getLogger(__name__)
+
+
+def _create_follower(**kwargs):
+    # Keep hardware-only dependencies out of policy-server and unit-test imports.
+    from examples.xtrainer_real.hardware import DobotXTrainer
+
+    return DobotXTrainer(**kwargs)
 
 
 def _obs_dict_to_arm_array(obs: dict[str, float]) -> np.ndarray:
@@ -42,7 +46,7 @@ class XTrainerRealEnvironment(_environment.Environment):
         render_height: int = 224,
         render_width: int = 224,
         prompt: str | None = None,
-        reset_pose: Optional[list[float]] = None,  # noqa: UP007
+        reset_pose: list[float] | None = None,
         max_joint_delta: float = 0.17,
         ramp_step: float = 0.01,
         ramp_max_steps: int = 100,
@@ -59,7 +63,7 @@ class XTrainerRealEnvironment(_environment.Environment):
         if camera_right_wrist_serial:
             right_cameras["cam_right_wrist"] = camera_right_wrist_serial
 
-        self._follower_left = DobotXTrainer(
+        self._follower_left = _create_follower(
             robot_ip=left_robot_ip,
             gripper_port=left_gripper_port,
             gripper_id=left_gripper_id,
@@ -69,7 +73,7 @@ class XTrainerRealEnvironment(_environment.Environment):
             camera_serials=left_cameras,
             camera_fps=camera_fps,
         )
-        self._follower_right = DobotXTrainer(
+        self._follower_right = _create_follower(
             robot_ip=right_robot_ip,
             gripper_port=right_gripper_port,
             gripper_id=right_gripper_id,

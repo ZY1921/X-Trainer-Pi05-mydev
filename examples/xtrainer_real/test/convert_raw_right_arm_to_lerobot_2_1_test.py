@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 import pytest
 
-from examples.xtrainer_real import convert_raw_right_arm_to_lerobot_2_1 as converter
+from examples.xtrainer_real.data_convert import convert_raw_right_arm_to_lerobot_2_1 as converter
 
 
 def test_select_right_arm_uses_source_dimensions_7_through_13():

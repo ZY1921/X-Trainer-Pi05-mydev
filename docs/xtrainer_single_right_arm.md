@@ -29,7 +29,7 @@
 
 ### 2.1 新增单右臂转换脚本
 
-新增 `examples/xtrainer_real/convert_raw_right_arm_to_lerobot_2_1.py`：
+新增 `examples/xtrainer_real/data_convert/convert_raw_right_arm_to_lerobot_2_1.py`：
 
 - 从每帧 `joint_positions[7:14]` 提取右臂状态。
 - 从每帧 `control[7:14]` 提取右臂动作。
@@ -38,7 +38,7 @@
 - 支持原转换脚本已有的图片嵌入、视频编码、坏帧跳过、编码重试和统计信息生成。
 - 输出 LeRobot v2.1 数据集，状态和动作的 feature shape 均为 `(7,)`。
 
-原文件 `convert_raw_to_lerobot_2_1.py` 没有修改，双臂数据仍可使用原入口转换。
+双臂数据仍可使用 `examples/xtrainer_real/data_convert/convert_raw_to_lerobot_2_1.py` 转换。
 
 ### 2.2 新增单右臂 Policy Transform
 
@@ -88,7 +88,7 @@
 新增 `examples/xtrainer_real/right_arm_single_main.py`：
 
 - 使用普通 WebSocket 同步请求 action chunk。
-- 显示 `top | right wrist` 双画面预览，可按 `q`、`Esc` 或关闭窗口退出。
+- 可通过 `--show-camera-preview` 显示 `top | right wrist` 双画面预览；默认不创建窗口，可按 `q`、`Esc` 或关闭窗口退出。
 - 将实机图像旋转、裁剪到与历史训练数据一致；因此采集分辨率固定为 `480x640`。
 - 启动机器人前校验服务端 metadata，包括右臂标识、7 维动作、模型槽位、相机键和 reset pose。
 - 检查每次服务端返回动作必须为 `(horizon, 7)`。
@@ -98,7 +98,7 @@
 
 新增 `examples/xtrainer_real/right_arm_single_async_rtc_main.py`：
 
-- 复用已有异步 RTC worker 和 RTC action merge 逻辑。
+- 复用双臂异步入口中的 RTC worker 和 RTC action merge 逻辑。
 - observation 只发送 7 维右臂状态和两路有效图像。
 - 支持 RTC guidance、异步请求、推理超时、JPEG 图像传输和 warmup。
 - 对异步返回结果额外执行 7 维动作检查。
@@ -136,7 +136,7 @@
 默认生成视频格式：
 
 ```bash
-python examples/xtrainer_real/convert_raw_right_arm_to_lerobot_2_1.py \
+python examples/xtrainer_real/data_convert/convert_raw_right_arm_to_lerobot_2_1.py \
   --raw_root <raw_collect_data> \
   --output_root <right_arm_dataset_root> \
   --task "<task description>" \
@@ -147,7 +147,7 @@ python examples/xtrainer_real/convert_raw_right_arm_to_lerobot_2_1.py \
 如果不希望编码视频：
 
 ```bash
-python examples/xtrainer_real/convert_raw_right_arm_to_lerobot_2_1.py \
+python examples/xtrainer_real/data_convert/convert_raw_right_arm_to_lerobot_2_1.py \
   --raw_root <raw_collect_data> \
   --output_root <right_arm_dataset_root> \
   --task "<task description>" \
@@ -170,7 +170,7 @@ python examples/xtrainer_real/convert_raw_right_arm_to_lerobot_2_1.py \
 每个任务先单独完成转换，再按命令中的顺序合并。例如先放红按钮、再放绿按钮，合并后它们的 `task_index` 分别为 0 和 1：
 
 ```bash
-python examples/xtrainer_real/merge_right_arm_lerobot_2_1.py \
+python examples/xtrainer_real/data_convert/merge_right_arm_lerobot_2_1.py \
   --input_roots \
     <red_button_lerobot_root> \
     <green_button_lerobot_root> \
@@ -303,7 +303,7 @@ python -m examples.xtrainer_real.right_arm_single_async_rtc_main \
 
 ## 4. 兼容性和实机注意事项
 
-- 原双臂转换脚本、双臂环境、原同步推理入口和原异步 RTC 推理入口均保留，可继续运行旧流程。
+- 双臂转换脚本和底层双臂环境继续保留；正式双臂入口已统一命名为 `bimanual_main.py` 和 `bimanual_async_rtc_main.py`，旧入口不再保留。
 - 新流程要求服务端 checkpoint metadata 明确声明右臂、7 维动作、模型槽位 `[7:14]` 和两路相机；误连双臂 checkpoint 时客户端会在连接机器人前报错。
 - top 和 right wrist 都是必需相机，缺少任意一个 serial 都不会启动。
 - 图像预处理要求客户端输出 `480x640`，不要修改 `--render-height` 和 `--render-width`。

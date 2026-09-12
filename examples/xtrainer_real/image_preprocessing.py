@@ -7,8 +7,8 @@ _TOP_SOURCE_SHAPE = (480, 640)
 _TOP_CROP_ROWS = slice(None, 430)
 
 
-def match_legacy_dataset_images(observation: dict) -> dict:
-    """Match the camera orientation and top-camera crop used during data collection."""
+def preprocess_inference_images(observation: dict) -> dict:
+    """Match the current camera orientation and crop used during data collection."""
     for camera_name in ("right_wrist",):
         image_key = f"observation.images.{camera_name}"
         observation[image_key] = np.ascontiguousarray(observation[image_key][::-1, ::-1])
@@ -17,7 +17,7 @@ def match_legacy_dataset_images(observation: dict) -> dict:
     top = observation[top_key]
     if top.shape[:2] != _TOP_SOURCE_SHAPE:
         raise ValueError(
-            "Legacy dataset image preprocessing requires top-camera observations "
+            "X-Trainer inference image preprocessing requires top-camera observations "
             f"with shape (480, 640, 3), got {top.shape}. Start the client with "
             "--render-height 480 --render-width 640."
         )

@@ -1,4 +1,4 @@
-"""Run X-Trainer with non-blocking client/server inference and optional RTC.
+"""Run bimanual X-Trainer with non-blocking inference and optional RTC.
 
 The robot control loop stays on the main thread. A dedicated worker owns the
 websocket connection and performs blocking network I/O while the robot keeps
@@ -23,11 +23,11 @@ from typing_extensions import override
 import tyro
 import websockets.sync.client
 
+from examples.xtrainer_real import bimanual_main as _sync_bimanual
+from examples.xtrainer_real import camera_visualization as _camera_visualization
 from examples.xtrainer_real import diagnostics as _diagnostics
-from examples.xtrainer_real import env as _env
-from examples.xtrainer_real import image_preprocessing as _image_preprocessing
 from examples.xtrainer_real import inference_action_recorder as _action_recorder
-from examples.xtrainer_real import main as _sync_main
+from examples.xtrainer_real import inference_environment as _inference_environment
 
 PROTOCOL_NAME = "openpi-async-rtc"
 PROTOCOL_VERSION = 2
@@ -35,51 +35,8 @@ PROTOCOL_VERSION = 2
 logger = logging.getLogger(__name__)
 
 
-class RightArmOnlyEnvironment(_env.XTrainerRealEnvironment):
-    """Discard model actions for the left arm after each episode reset."""
-
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self._left_hold_action: np.ndarray | None = None
-
-    @override
-    def get_observation(self) -> dict:
-        observation = super().get_observation()
-        _image_preprocessing.match_legacy_dataset_images(observation)
-        return observation
-
-    @override
-    def reset(self) -> None:
-        # Let the base environment move both arms to the server-provided reset
-        # pose, then hold the left arm and gripper at that pose for the episode.
-        super().reset()
-        if self._last_action is None:
-            raise RuntimeError("X-Trainer reset did not initialize the current action.")
-        self._left_hold_action = np.array(self._last_action[:7], copy=True)
-        logger.info("Left arm frozen after reset at %s", self._left_hold_action.tolist())
-
-    @override
-    def apply_action(self, action: dict) -> None:
-        if "actions" not in action:
-            raise KeyError(f"Missing 'actions' in action dict: {tuple(action.keys())}")
-        if self._left_hold_action is None:
-            raise RuntimeError("Left-arm hold pose is unavailable; reset must run before applying actions.")
-
-        target = np.asarray(action["actions"], dtype=np.float64).reshape(-1).copy()
-        if target.shape[0] != 14:
-            raise ValueError(f"Expected action length 14, got {target.shape[0]}")
-
-        # [0:7] is left joints 1-6 plus the left gripper. Keep it fixed at
-        # the post-reset pose; [7:14] (the right arm) remains model-controlled.
-        target[:7] = self._left_hold_action
-
-        filtered_action = dict(action)
-        filtered_action["actions"] = target
-        super().apply_action(filtered_action)
-
-
 @dataclasses.dataclass
-class Args(_sync_main.Args):
+class Args(_sync_bimanual.Args):
     """X-Trainer arguments with asynchronous inference and RTC controls."""
 
     rtc_enabled: bool = True
@@ -127,8 +84,8 @@ class Args(_sync_main.Args):
     inference_action_output_dir: str = "output"
     """Root directory for timestamped inference action recording directories."""
 
-    inference_action_plot_start_index: int = 7
-    """First action dimension shown in the generated plot; 7 selects the right arm."""
+    inference_action_plot_start_index: int = 0
+    """First action dimension shown in the generated plot."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -705,6 +662,17 @@ class AsyncRTCPolicyAgent(_agent.Agent):
             raise ValueError("The server policy does not support RTC; a JAX checkpoint is required.")
 
 
+class BimanualAsyncRTCPolicyAgent(AsyncRTCPolicyAgent):
+    """Async RTC agent that requires 14D bimanual action chunks."""
+
+    @override
+    def _validated_result(self, result: dict[str, Any] | None) -> tuple[dict[str, Any], np.ndarray]:
+        result, actions = super()._validated_result(result)
+        if actions.shape[-1] != _inference_environment.BIMANUAL_ACTION_DIM:
+            raise ValueError(f"Expected bimanual actions with shape (horizon, 14), got {actions.shape}.")
+        return result, actions
+
+
 def _validate_rtc_args(args: Args) -> None:
     if args.rtc_inference_delay < 0:
         raise ValueError("--rtc-inference-delay must be non-negative.")
@@ -726,6 +694,10 @@ def _validate_image_transport_args(args: Args) -> None:
 
 
 def main(args: Args) -> None:
+    if (args.render_height, args.render_width) != (480, 640):
+        raise ValueError("Bimanual image preprocessing requires --render-height 480 --render-width 640.")
+    if not 0 <= args.inference_action_plot_start_index < _inference_environment.BIMANUAL_ACTION_DIM:
+        raise ValueError("--inference-action-plot-start-index must be in [0, 13].")
     if args.rtc_enabled:
         _validate_rtc_args(args)
     _validate_image_transport_args(args)
@@ -753,7 +725,7 @@ def _run_robot(args: Args, worker: AsyncRTCInferenceWorker) -> None:
 
     action_recorder = None
     if args.record_inference_actions:
-        mode = "async_rtc" if args.rtc_enabled else "async_baseline"
+        mode = "bimanual_async_rtc" if args.rtc_enabled else "bimanual_async_baseline"
         action_recorder = _action_recorder.InferenceActionRecorder(
             args.inference_action_output_dir,
             mode=mode,
@@ -762,7 +734,7 @@ def _run_robot(args: Args, worker: AsyncRTCInferenceWorker) -> None:
         )
         logger.info("Recording inference actions in %s", action_recorder.output_dir)
 
-    environment = RightArmOnlyEnvironment(
+    environment = _inference_environment.BimanualInferenceEnvironment(
         left_robot_ip=args.left_robot_ip,
         right_robot_ip=args.right_robot_ip,
         left_gripper_port=args.left_gripper_port,
@@ -784,6 +756,7 @@ def _run_robot(args: Args, worker: AsyncRTCInferenceWorker) -> None:
         ramp_max_steps=args.ramp_max_steps,
         gripper_update_threshold=args.gripper_update_threshold,
         servo_step_limit=args.servo_step_limit,
+        show_camera_preview=args.show_camera_preview,
     )
     try:
         subscribers = []
@@ -795,7 +768,7 @@ def _run_robot(args: Args, worker: AsyncRTCInferenceWorker) -> None:
                 )
             )
 
-        agent = AsyncRTCPolicyAgent(
+        agent = BimanualAsyncRTCPolicyAgent(
             worker,
             request_interval=args.action_horizon,
             rtc_enabled=args.rtc_enabled,
@@ -814,7 +787,10 @@ def _run_robot(args: Args, worker: AsyncRTCInferenceWorker) -> None:
             num_episodes=args.num_episodes,
             max_episode_steps=args.max_episode_steps,
         )
-        runtime.run()
+        try:
+            runtime.run()
+        except _camera_visualization.CameraPreviewStopRequestedError:
+            logger.info("Camera preview closed; stopping the client.")
     finally:
         try:
             environment.close()

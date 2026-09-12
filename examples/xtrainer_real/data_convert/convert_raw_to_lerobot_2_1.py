@@ -343,7 +343,7 @@ def _get_video_info_cv2(video_path: Path) -> dict:
         "video.codec": codec if codec else "unknown",
         "video.pix_fmt": "unknown",
         "video.is_depth_map": False,
-        "video.fps": int(round(fps)) if fps > 0 else 0,
+        "video.fps": round(fps) if fps > 0 else 0,
         "video.channels": 3,
         "has_audio": False,
     }

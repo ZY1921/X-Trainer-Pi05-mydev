@@ -6,7 +6,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from examples.xtrainer_real import merge_right_arm_lerobot_2_1 as merger
+from examples.xtrainer_real.data_convert import merge_right_arm_lerobot_2_1 as merger
 
 
 def _write_json(path: Path, value: dict) -> None:
