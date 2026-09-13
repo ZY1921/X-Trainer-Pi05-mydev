@@ -1,0 +1,4 @@
+-r ../requirements.txt
+sounddevice
+faster-whisper
+opencc-python-reimplemented
