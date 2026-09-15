@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 def _create_follower(**kwargs):
     # Keep hardware-only dependencies out of policy-server and unit-test imports.
-    from examples.xtrainer_real.hardware import DobotXTrainer
+    from examples.xtrainer_real.hardware import DobotXTrainer  # noqa: PLC0415
 
     return DobotXTrainer(**kwargs)
 
@@ -94,6 +94,7 @@ class XTrainerRealEnvironment(_environment.Environment):
         self._gripper_update_threshold = max(gripper_update_threshold, 0.0)
 
         self._connected = False
+        self._faulted = False
         self._last_action: np.ndarray | None = None
         self._last_gripper_sent = np.array([1.0, 1.0], dtype=np.float64)
 
@@ -143,6 +144,8 @@ class XTrainerRealEnvironment(_environment.Environment):
         target = np.asarray(action["actions"], dtype=np.float64).reshape(-1).copy()
         if target.shape[0] != 14:
             raise ValueError(f"Expected action length 14, got {target.shape[0]}")
+        if not np.all(np.isfinite(target)):
+            raise ValueError("Action must contain only finite values")
 
         target[6] = float(np.clip(target[6], 0.0, 1.0))
         target[13] = float(np.clip(target[13], 0.0, 1.0))
@@ -162,23 +165,28 @@ class XTrainerRealEnvironment(_environment.Environment):
         self._last_action = target.copy()
 
     def close(self) -> None:
-        if not self._connected:
-            return
+        self._connected = False
         for follower in (self._follower_left, self._follower_right):
             try:
                 follower.disconnect()
             except Exception:
                 logger.exception("Failed to disconnect follower cleanly.")
-        self._connected = False
 
     def _ensure_connected(self) -> None:
         if self._connected:
             return
-        self._follower_left.connect()
-        self._follower_right.connect()
-        self._connected = True
-        self._last_action = self._get_bimanual_qpos()
-        self._last_gripper_sent = np.array([self._last_action[6], self._last_action[13]], dtype=np.float64)
+        if self._faulted:
+            raise RuntimeError("Bimanual environment faulted; recreate it before reconnecting")
+        try:
+            self._follower_left.connect()
+            self._follower_right.connect()
+            self._last_action = self._get_bimanual_qpos()
+            self._last_gripper_sent = np.array([self._last_action[6], self._last_action[13]], dtype=np.float64)
+            self._connected = True
+        except BaseException:
+            self._faulted = True
+            self.close()
+            raise
 
     def _read_camera_frame(self, camera_name: str, retries: int = 5) -> np.ndarray:
         camera = self._get_camera(camera_name)
@@ -211,8 +219,13 @@ class XTrainerRealEnvironment(_environment.Environment):
         raise ValueError(f"Unsupported camera name: {camera_name}")
 
     def _get_bimanual_qpos(self) -> np.ndarray:
-        left_obs = _obs_dict_to_arm_array(self._follower_left.get_low_latency_observation())
-        right_obs = _obs_dict_to_arm_array(self._follower_right.get_low_latency_observation())
+        try:
+            left_obs = _obs_dict_to_arm_array(self._follower_left.get_low_latency_observation())
+            right_obs = _obs_dict_to_arm_array(self._follower_right.get_low_latency_observation())
+        except BaseException:
+            self._faulted = True
+            self.close()
+            raise
         return np.concatenate([left_obs, right_obs])
 
     def _split_bimanual_action(self, action: np.ndarray) -> tuple[dict[str, float], dict[str, float]]:
@@ -238,8 +251,13 @@ class XTrainerRealEnvironment(_environment.Environment):
         else:
             self._last_gripper_sent[1] = right_gripper
 
-        self._follower_left.send_action(left_action)
-        self._follower_right.send_action(right_action)
+        try:
+            self._follower_left.send_action(left_action)
+            self._follower_right.send_action(right_action)
+        except BaseException:
+            self._faulted = True
+            self.close()
+            raise
 
     def _move_smooth(self, start_action: np.ndarray, goal_action: np.ndarray) -> None:
         max_delta = float(np.max(np.abs(goal_action - start_action)))

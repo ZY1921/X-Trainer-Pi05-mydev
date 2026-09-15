@@ -5,6 +5,7 @@ import types
 import numpy as np
 import pytest
 
+from examples.xtrainer_real.hardware.realsense_camera import RealSenseCamera
 from examples.xtrainer_real.voice.hardware import InterruptibleRealSenseCamera
 from examples.xtrainer_real.voice.hardware import StrictDobotConnection
 from examples.xtrainer_real.voice.hardware import VoiceDobotXTrainer
@@ -15,6 +16,12 @@ class FakeSocket:
         self.reply = reply
 
     def sendall(self, _data):
+        pass
+
+    def settimeout(self, _timeout):
+        pass
+
+    def close(self):
         pass
 
     def recv(self, _size):
@@ -81,7 +88,7 @@ def test_interrupted_partial_connect_closes_resources(monkeypatch):
     monkeypatch.setattr("examples.xtrainer_real.voice.hardware.StrictDobotConnection", Connection)
     with pytest.raises(KeyboardInterrupt):
         follower.connect()
-    assert events == ["DisableRobot()", "closed"]
+    assert events == ["closed"]  # No disable command before enable has succeeded.
     assert follower._dashboard is None
 
 
@@ -99,7 +106,9 @@ def test_fragmented_robot_reply_is_reassembled():
 
 
 @pytest.mark.parametrize("failure", [KeyboardInterrupt(), RuntimeError("camera warmup")])
-def test_camera_warmup_failure_releases_pipeline(monkeypatch, failure):
+@pytest.mark.parametrize("camera_type", [RealSenseCamera, InterruptibleRealSenseCamera])
+@pytest.mark.parametrize("stop_fails", [False, True])
+def test_camera_warmup_failure_releases_pipeline(monkeypatch, failure, camera_type, stop_fails):
     events = []
 
     class Pipeline:
@@ -111,6 +120,8 @@ def test_camera_warmup_failure_releases_pipeline(monkeypatch, failure):
 
         def stop(self):
             events.append("stop")
+            if stop_fails:
+                raise RuntimeError("stop failed")
 
     config = types.SimpleNamespace(enable_device=lambda _serial: None, enable_stream=lambda *_args: None)
     monkeypatch.setitem(
@@ -123,8 +134,9 @@ def test_camera_warmup_failure_releases_pipeline(monkeypatch, failure):
             format=types.SimpleNamespace(bgr8=1),
         ),
     )
-    camera = InterruptibleRealSenseCamera("fake")
-    with pytest.raises(type(failure)):
+    camera = camera_type("fake")
+    with pytest.raises(type(failure)) as caught:
         camera.connect()
+    assert caught.value is failure
     assert events == ["start", "stop"]
     assert not camera.is_connected

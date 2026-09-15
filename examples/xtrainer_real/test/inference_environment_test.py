@@ -100,3 +100,60 @@ def test_bimanual_environment_sends_both_halves_of_14d_action(monkeypatch):
 
     with pytest.raises(ValueError, match="length 14"):
         environment.apply_action({"actions": np.zeros(7)})
+
+
+@pytest.mark.parametrize("failure_stage", ["connect", "observe", "send"])
+def test_bimanual_failure_closes_both_arms_and_blocks_reconnect(monkeypatch, failure_stage):
+    created = []
+
+    class Follower:
+        def __init__(self, **_kwargs):
+            self.right = bool(created)
+            self.connected = False
+            self.disconnects = 0
+            self.cameras = {}
+            created.append(self)
+
+        def fail_at(self, stage):
+            if self.right and stage == failure_stage:
+                raise ConnectionError(f"right arm {stage} failed")
+
+        def connect(self):
+            self.connected = True
+            self.fail_at("connect")
+
+        def disconnect(self):
+            self.connected = False
+            self.disconnects += 1
+
+        def get_low_latency_observation(self):
+            self.fail_at("observe")
+            return {f"joint{index}.pos": 0.0 for index in range(1, 7)}
+
+        def send_action(self, _action):
+            self.fail_at("send")
+
+    monkeypatch.setattr(bimanual_env, "_create_follower", Follower)
+    environment = bimanual_env.XTrainerRealEnvironment()
+    with pytest.raises(ConnectionError, match=f"right arm {failure_stage} failed"):
+        environment.apply_action({"actions": np.zeros(14)})
+
+    assert all(not arm.connected and arm.disconnects >= 1 for arm in created)
+    assert not environment._connected
+    with pytest.raises(RuntimeError, match="faulted"):
+        environment.apply_action({"actions": np.zeros(14)})
+
+
+@pytest.mark.parametrize(
+    ("environment_type", "dimension"),
+    [(bimanual_env.XTrainerRealEnvironment, 14), (right_arm_env.XTrainerRightArmRealEnvironment, 7)],
+)
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+def test_environment_rejects_nonfinite_action_before_sending(monkeypatch, environment_type, dimension, value):
+    environment = object.__new__(environment_type)
+    monkeypatch.setattr(environment, "_ensure_connected", lambda: None)
+    target = np.zeros(dimension)
+    # A bad gripper value must not disappear through clipping or change-threshold filtering.
+    target[-1] = value
+    with pytest.raises(ValueError, match="finite"):
+        environment.apply_action({"actions": target})

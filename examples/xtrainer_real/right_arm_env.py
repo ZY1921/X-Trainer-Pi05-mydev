@@ -23,7 +23,7 @@ def _observation_to_action_array(observation: dict[str, float]) -> np.ndarray:
 
 def _create_follower(**kwargs):
     # Keep hardware-only dependencies out of policy-server and unit-test imports.
-    from examples.xtrainer_real.hardware import DobotXTrainer
+    from examples.xtrainer_real.hardware import DobotXTrainer  # noqa: PLC0415
 
     return DobotXTrainer(**kwargs)
 
@@ -122,6 +122,8 @@ class XTrainerRightArmRealEnvironment(_environment.Environment):
         target = np.asarray(action["actions"], dtype=np.float64).reshape(-1).copy()
         if target.shape[0] != PHYSICAL_ACTION_DIM:
             raise ValueError(f"Expected action length {PHYSICAL_ACTION_DIM}, got {target.shape[0]}")
+        if not np.all(np.isfinite(target)):
+            raise ValueError("Action must contain only finite values")
         target[6] = float(np.clip(target[6], 0.0, 1.0))
 
         if self._last_action is None:

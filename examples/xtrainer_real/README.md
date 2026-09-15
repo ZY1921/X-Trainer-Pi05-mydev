@@ -1,5 +1,7 @@
 # X-Trainer 真机推理客户端
 
+Nova2 V4 适配位于本地分支 `feature-nova2-v4-protocol`。四个真机入口共用 `hardware/dobot_xtrainer.py` 的 V4 驱动，机器人控制与 ServoJ 均通过 `29999`；语音入口复用同一驱动。`v4.6.5.0-Force-beta6` 尚待真机验收，启动条件与验收顺序见 [实机部署](../../docs/实机部署.md)。
+
 本目录是自包含的 X-Trainer 真机运行环境，只保留四个正式推理入口。四个入口共用相同的图像预处理和可选实时预览模块。
 
 ## 推理入口

@@ -1,3 +1,4 @@
+import contextlib
 import threading
 
 import numpy as np
@@ -23,7 +24,7 @@ class RealSenseCamera:
         if self._connected:
             return
 
-        import pyrealsense2 as rs
+        import pyrealsense2 as rs  # noqa: PLC0415 - cameras are optional on policy/test machines
 
         pipeline = rs.pipeline()
         config = rs.config()
@@ -31,13 +32,15 @@ class RealSenseCamera:
             config.enable_device(self.serial)
         config.enable_stream(rs.stream.color, self.width, self.height, rs.format.bgr8, self.fps)
         pipeline.start(config)
-
-        # Warm up frames.
-        for _ in range(10):
-            pipeline.wait_for_frames(timeout_ms=5000)
-
         self._pipeline = pipeline
         self._connected = True
+        try:
+            for _ in range(10):
+                pipeline.wait_for_frames(timeout_ms=5000)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                self.disconnect()
+            raise
 
     def async_read(self, timeout_ms: int = 50) -> np.ndarray | None:
         if not self._connected or self._pipeline is None:
@@ -53,9 +56,7 @@ class RealSenseCamera:
         return np.ascontiguousarray(bgr[..., ::-1])
 
     def disconnect(self) -> None:
-        if not self._connected:
-            return
-        if self._pipeline is not None:
-            self._pipeline.stop()
-        self._pipeline = None
+        pipeline, self._pipeline = self._pipeline, None
         self._connected = False
+        if pipeline is not None:
+            pipeline.stop()
